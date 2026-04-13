@@ -1,9 +1,10 @@
 import importlib.util
+import logging
 import sys
 from pathlib import Path
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("agent-tools")
+mcp = FastMCP("agent-tools", log_level='WARNING')
 
 PLUGINS_DIR = Path(__file__).parent / "plugins"
 
@@ -11,12 +12,22 @@ PLUGINS_DIR = Path(__file__).parent / "plugins"
 # Auto-loads plugins from /plugins directory
 # Each file is supposed to be one self-contained tool definition
 
+logger = logging.getLogger("mcp-server")
+logger.setLevel(logging.INFO)
 
-def load_plugins():
+handler = logging.StreamHandler(sys.stderr)
+handler.setFormatter(logging.Formatter("[mcp-server] %(levelname)s: %(message)s"))
+
+logger.handlers.clear()
+logger.addHandler(handler)
+logger.propagate = False
+
+
+def load_plugins() -> None:
     """Dynamically load and register all plugins from the plugins directory."""
 
     if not PLUGINS_DIR.exists():
-        print("[mcp_server] plugins/ directory not found, creating it.", file=sys.stderr)
+        logger.info("Plugins directory not found, creating it...")
         PLUGINS_DIR.mkdir()
         return
 
@@ -28,7 +39,7 @@ def load_plugins():
         spec = importlib.util.spec_from_file_location(module_name, plugin_file)
 
         if spec is None:
-            print(f"[mcp_server] Could not load spec from file. Skipping plugin \"{plugin_file}\".", file=sys.stderr)
+            logger.info("Could not load spec from file. Skipping Plugin: %s", plugin_file)
             break
 
         module = importlib.util.module_from_spec(spec)
@@ -38,13 +49,13 @@ def load_plugins():
 
         try:
             if spec.loader is None:
-                print(f"[mcp_server] Loader of spec is null. Skipping plugin \"{plugin_file}\".", file=sys.stderr)
+                logger.info("Loader of spec is null. Skipping Plugin: %s", plugin_file)
                 break
 
             spec.loader.exec_module(module)
-            print(f"[mcp_server] Loaded plugin: {plugin_file.name}", file=sys.stderr)
+            logger.info("Loaded plugin: %s", plugin_file.name)
         except Exception as e:
-            print(f"[mcp_server] Failed to load {plugin_file.name}: {e}", file=sys.stderr)
+            logger.info("Failed to load: %s", e)
 
 
 load_plugins()

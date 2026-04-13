@@ -2,6 +2,7 @@
 Plugin: calculator
 Safely evaluates basic math expressions.
 """
+
 import ast
 import operator
 

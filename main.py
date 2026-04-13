@@ -1,8 +1,3 @@
-"""
-AI Agent TUI — Textual UI + Ollama + MCP tools.
-Run: python main.py
-"""
-
 import asyncio
 import json
 import sys
@@ -10,16 +5,16 @@ from pathlib import Path
 from typing import override
 
 import ollama
-
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
-
 from textual.app import App, ComposeResult
-from textual.widgets import Footer, Header, Input, RichLog
-
+from textual.containers import Horizontal, Vertical
+from textual.widgets import Footer, Header, Input, RichLog, Label
 from typing_extensions import final
 
-MODEL = "qwen2.5:7b"  # change to any Ollama model you have pulled
+from custom_types import CommandHistory, OllamaTool, Mode
+
+MODEL = "qwen2.5:7b"  # TODO: change to other ollama models for testing
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
 SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
 
@@ -28,58 +23,184 @@ SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
 class ChatApp(App):
     """Minimal Textual chat app."""
 
-    TITLE = "AI Agent TUI"
-    BINDINGS = [("ctrl+c", "quit", "Quit")]
+    CSS_PATH = "app.css"
 
-    def __init__(self, session: ClientSession, tools: list, **kwargs) -> None:
+    TITLE = "Mini Claw"
+    SUB_TITLE = "Your personal assistant"
+    BINDINGS = [
+        ("q", "quit", "Quit"),
+        ("i", "enter_insert", "Insert mode"),
+        ("escape", "enter_normal", "Normal mode"),
+        ("t", "show_tools", "Show tools"),
+        ("c", "clear_chat", "Clear"),
+    ]
+
+    mode: Mode
+
+    def __init__(
+        self, session: ClientSession, tools: list[OllamaTool], **kwargs
+    ) -> None:
         super().__init__(**kwargs)
         self.session = session
-        self.tools = tools  # Ollama-format tool definitions
-        self.history: list[dict] = []
+        self.tools = tools
+        self.history: list[CommandHistory] = []
+        self.mode = Mode.NORMAL
+
+    def write_user(self, log: RichLog, text: str) -> None:
+        log.write("\n[bold #7aa2f7]You[/bold #7aa2f7]")
+        log.write(f"[#c0caf5]{text}[/]\n")
+        log.scroll_end(animate=False)
+
+    def write_system(self, log: RichLog, text: str):
+        log.write(f"[dim]{text}[/dim]\n")
+        log.scroll_end(animate=False)
+
+    def write_assistant(self, log: RichLog, text: str):
+        log.write(f"\n[bold #9ece6a]{self.TITLE}[/bold #9ece6a]")
+        log.write(f"[#c0caf5]{text}[/]\n")
+        log.scroll_end(animate=False)
 
     @override
     def compose(self) -> ComposeResult:
-        yield Header()
-        yield RichLog(id="log", markup=True, wrap=True)
-        yield Input(placeholder="Type a message and press Enter…")
-        yield Footer()
+        yield Header(show_clock=False, icon="")
+        with Vertical():
+            yield RichLog(id="log", markup=True, wrap=True)
+            yield RichLog(id="tools", markup=True, wrap=True)
+            yield Input(placeholder="Type a message and press Enter…")
+        with Horizontal(id="footer-outer"):
+            yield Label("", id="status")
+            with Horizontal(id="footer-inner"):
+                yield Footer(show_command_palette=False)
+
+    def update_status(self):
+        status = self.query_one("#status", Label)
+
+        if self.mode == Mode.NORMAL:
+            status.update("[bold yellow]NORMAL[/]")
+        elif self.mode == Mode.INSERT:
+            status.update("[bold green]INSERT[/]")
+        elif self.mode == Mode.TOOLS:
+            status.update("[bold magenta]TOOLS[/]")
 
     def on_mount(self) -> None:
-        log = self.query_one(RichLog)
+        """
+        On mount print the list of tools loaded from the MCP
+        """
+
+        log = self.query_one("#log", RichLog)
+
         tool_names = [t["function"]["name"] for t in self.tools] if self.tools else []
+
+        tools_view = self.query_one("#tools", RichLog)
+        tools_view.display = False
+
         if tool_names:
-            log.write(f"[dim]Tools: {', '.join(tool_names)}[/dim]\n")
+            self.write_system(log, f"Succesfully loaded tools: {', '.join(tool_names)}")
         else:
-            log.write("[dim]No tools loaded (add .py files to plugins/)[/dim]\n")
-        self.query_one(Input).focus()
+            self.write_system(log, "No tools loaded (add .py files to plugins/)")
+
+        self.write_system(log, f"{self.TITLE} is ready for you!")
+
+        self.update_status()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
+        """
+        Input handler. Handles input field submission. Runs agent with request in thread.
+
+        Args:
+            event: Input event by Textual
+        """
+
+        # Only allow typing while in insert mode!
+        if self.mode != Mode.INSERT:
+            return
+
         text = event.value.strip()
         if not text:
             return
         event.input.value = ""
 
-        log = self.query_one(RichLog)
-        log.write(f"[bold cyan]You:[/bold cyan] {text}\n")
+        log = self.query_one("#log", RichLog)
+        self.write_user(log, text)
         self.history.append({"role": "user", "content": text})
 
         # Run the agentic loop in a worker so the UI stays responsive
-        self.run_worker(self._agent_turn(log), exclusive=True)
+        self.run_worker(
+            self._agent_turn(log),
+            exclusive=True, # makes it so that the previous request gets cancelled upon a new request!
+            thread=False)
+
+    def action_enter_insert(self):
+        self.mode = Mode.INSERT
+
+        tools_view = self.query_one("#tools")
+        log = self.query_one("#log")
+
+        tools_view.display = False
+        log.display = True
+
+        input_field = self.query_one(Input)
+        input_field.disabled = False
+        input_field.focus()
+        input_field.placeholder = "Type a message..."
+
+        self.update_status()
+
+    def action_enter_normal(self):
+        self.mode = Mode.NORMAL
+
+        tools_view = self.query_one("#tools")
+        log = self.query_one("#log")
+
+        tools_view.display = False
+        log.display = True
+
+        input_field = self.query_one(Input)
+        input_field.disabled = True
+        input_field.blur()
+
+        self.update_status()
+
+    def action_show_tools(self):
+        self.mode = Mode.TOOLS
+
+        tools_view = self.query_one("#tools", RichLog)
+        log = self.query_one("#log")
+
+        tools_view.display = True
+        log.display = False
+
+        tools_view.clear()
+
+        for t in self.tools:
+            fn = t["function"]
+            tools_view.write(f"[bold #bb9af7]{fn['name']}[/]")
+            self.write_system(tools_view, fn['description'])
+            self.write_system(tools_view, json.dumps(fn['parameters'], indent=2))
+
+        self.update_status()
+
+    def action_clear_chat(self):
+        self.history.clear()
+        self.query_one("#log", RichLog).clear()
 
     async def _agent_turn(self, log: RichLog) -> None:
         """Agentic loop: call Ollama, handle tool calls, repeat."""
+        self.action_enter_normal()
+
         while True:
-            response = ollama.chat(
+            # Send request to ollama and wait for response
+            response = await ollama.AsyncClient().chat(
                 model=MODEL,
                 messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
                 tools=self.tools or None,
             )
             msg = response.message
-            self.history.append(msg)
+            self.history.append(msg)  # pyright: ignore[reportArgumentType]
 
             # Print any text content
             if msg.content:
-                log.write(f"[bold green]Assistant:[/bold green] {msg.content}\n")
+                self.write_assistant(log, msg.content)
 
             # No tool calls → we're done
             if not msg.tool_calls:
@@ -87,20 +208,24 @@ class ChatApp(App):
 
             # Handle tool calls
             for call in msg.tool_calls:
+                # Get name and args
                 name = call.function.name
-                args = call.function.arguments  # already a dict from ollama client
-                log.write(f"[dim]  🔧 {name}({json.dumps(args)})[/dim]")
+                args = call.function.arguments
+
+                self.write_system(log, f"Using tool: {name} ({json.dumps(args)})")
+
+                # Call tool via session
                 try:
-                    result = await self.session.call_tool(name, args)
-                    result_text = (
+                    result = await self.session.call_tool(name, args)  # pyright: ignore[reportArgumentType]
+                    result_text = (  # pyright: ignore[reportUnknownVariableType]
                         result.content[0].text
                         if result.content and hasattr(result.content[0], "text")
                         else str(result.content)
                     )
-                    log.write("[dim]  ✓ done[/dim]\n")
+                    self.write_system(log, "done")
                 except Exception as e:
                     result_text = f"Error: {e}"
-                    log.write(f"[dim]  ✗ {e}[/dim]\n")
+                    self.write_system(log, f"{e}")
 
                 self.history.append(
                     {
@@ -111,6 +236,12 @@ class ChatApp(App):
 
 
 async def run() -> None:
+    """
+    Starts the MCP Server in the background.
+    Gathers the list of tools available within our Agentic AI.
+    Starts the TUI.
+    """
+
     server_params = StdioServerParameters(
         command=sys.executable,
         args=[str(SERVER_SCRIPT)],
@@ -124,7 +255,7 @@ async def run() -> None:
             tools_response = await session.list_tools()
             mcp_tools = tools_response.tools
 
-            ollama_tools = [
+            ollama_tools: list[OllamaTool] = [
                 {
                     "type": "function",
                     "function": {
@@ -136,6 +267,7 @@ async def run() -> None:
                 for t in mcp_tools
             ]
 
+            # Start TUI (run in background)
             app = ChatApp(session=session, tools=ollama_tools)
             await app.run_async()
 
