@@ -4,6 +4,7 @@ Fetches the text content of a URL.
 """
 import urllib.request
 
+from mcp_server import mcp
 
 @mcp.tool()
 def web_fetch(url: str) -> str:
