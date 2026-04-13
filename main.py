@@ -1,6 +1,7 @@
 import asyncio
 import json
 import sys
+from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import override
 
@@ -16,7 +17,17 @@ from custom_types import CommandHistory, OllamaTool, Mode
 
 MODEL = "qwen2.5:7b"  # TODO: change to other ollama models for testing
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
+MAX_STEPS = 8
 SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
+
+ASCII_LOGO = """
+████████╗██╗███╗   ██╗██╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗
+╚══██╔══╝██║████╗  ██║╚██╗ ██╔╝██╔════╝██║     ██╔══██╗██║    ██║
+   ██║   ██║██╔██╗ ██║ ╚████╔╝ ██║     ██║     ███████║██║ █╗ ██║
+   ██║   ██║██║╚██╗██║  ╚██╔╝  ██║     ██║     ██╔══██║██║███╗██║
+   ██║   ██║██║ ╚████║   ██║   ╚██████╗███████╗██║  ██║╚███╔███╔╝
+   ╚═╝   ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ 
+"""
 
 
 @final
@@ -36,32 +47,65 @@ class ChatApp(App):
     ]
 
     mode: Mode
+    debug_active: bool
 
     def __init__(
-        self, session: ClientSession, tools: list[OllamaTool], **kwargs
+        self, session: ClientSession, tools: list[OllamaTool], args: Namespace, **kwargs
     ) -> None:
         super().__init__(**kwargs)
         self.session = session
         self.tools = tools
         self.history: list[CommandHistory] = []
         self.mode = Mode.NORMAL
+        self.debug_active = args.debug  # pyright: ignore[reportAny]
 
     def write_user(self, log: RichLog, text: str) -> None:
+        """
+        Helper function for messages by the user
+
+        Args:
+            log: log object to print to
+            text: text to print
+        """
+
         log.write("\n[bold #7aa2f7]You[/bold #7aa2f7]")
         log.write(f"[#c0caf5]{text}[/]\n")
         log.scroll_end(animate=False)
 
     def write_system(self, log: RichLog, text: str):
+        """
+        Helper function for system messages
+
+        Args:
+            log: log object to print to
+            text: text to print
+        """
+
         log.write(f"[dim]{text}[/dim]\n")
         log.scroll_end(animate=False)
 
     def write_assistant(self, log: RichLog, text: str):
+        """
+        Helper function for messages by the llm ("assistant")
+
+        Args:
+            log: log object to print to
+            text: text to print
+        """
+
         log.write(f"\n[bold #9ece6a]{self.TITLE}[/bold #9ece6a]")
         log.write(f"[#c0caf5]{text}[/]\n")
         log.scroll_end(animate=False)
 
     @override
     def compose(self) -> ComposeResult:
+        """
+
+        Sets up the TUI Layout and all available Widgets
+
+        Yields: TUI Layout
+            
+        """
         yield Header(show_clock=False, icon="")
         with Vertical():
             yield RichLog(id="log", markup=True, wrap=True)
@@ -73,6 +117,10 @@ class ChatApp(App):
                 yield Footer(show_command_palette=False)
 
     def update_status(self):
+        """
+        Updates the status bar with the current MODE
+        """
+
         status = self.query_one("#status", Label)
 
         if self.mode == Mode.NORMAL:
@@ -94,12 +142,17 @@ class ChatApp(App):
         tools_view = self.query_one("#tools", RichLog)
         tools_view.display = False
 
+        self.write_system(log, ASCII_LOGO)
+
+        if self.debug_active:
+            self.write_system(log, "Debug mode is active. Expect detailed logs.")
+
         if tool_names:
             self.write_system(log, f"Succesfully loaded tools: {', '.join(tool_names)}")
         else:
             self.write_system(log, "No tools loaded (add .py files to plugins/)")
 
-        self.write_system(log, f"{self.TITLE} is ready for you!")
+        self.write_system(log, f"{self.TITLE} is ready for you! Press 'i' to interact.")
 
         self.update_status()
 
@@ -127,10 +180,16 @@ class ChatApp(App):
         # Run the agentic loop in a worker so the UI stays responsive
         self.run_worker(
             self._agent_turn(log),
-            exclusive=True, # makes it so that the previous request gets cancelled upon a new request!
-            thread=False)
+            exclusive=True,  # makes it so that the previous request gets cancelled upon a new request!
+            thread=False,
+        )
 
     def action_enter_insert(self):
+        """
+        Action which gets called when the "enter_insert" event is triggered.
+        Updates mode. Enables / Disables the required fields / widgets.
+        """
+
         self.mode = Mode.INSERT
 
         tools_view = self.query_one("#tools")
@@ -147,6 +206,11 @@ class ChatApp(App):
         self.update_status()
 
     def action_enter_normal(self):
+        """
+        Action which gets called when the "enter_normal" event is triggered.
+        Updates mode. Enables / Disables the required fields / widgets.
+        """
+
         self.mode = Mode.NORMAL
 
         tools_view = self.query_one("#tools")
@@ -162,6 +226,11 @@ class ChatApp(App):
         self.update_status()
 
     def action_show_tools(self):
+        """
+        Action which gets called when the "show_tools" event is triggered.
+        Updates mode. Enables / Disables the required fields / widgets.
+        """
+
         self.mode = Mode.TOOLS
 
         tools_view = self.query_one("#tools", RichLog)
@@ -175,20 +244,36 @@ class ChatApp(App):
         for t in self.tools:
             fn = t["function"]
             tools_view.write(f"[bold #bb9af7]{fn['name']}[/]")
-            self.write_system(tools_view, fn['description'])
-            self.write_system(tools_view, json.dumps(fn['parameters'], indent=2))
+            self.write_system(tools_view, fn["description"])
+            self.write_system(tools_view, json.dumps(fn["parameters"], indent=2))
 
         self.update_status()
 
     def action_clear_chat(self):
+        """
+        Action which gets called when the "clear_chat" event is triggered.
+        Clears the history and the log.
+        """
+
         self.history.clear()
         self.query_one("#log", RichLog).clear()
 
     async def _agent_turn(self, log: RichLog) -> None:
-        """Agentic loop: call Ollama, handle tool calls, repeat."""
+        """
+        Agentic loop: call Ollama, handle tool calls, repeat.
+        """
+
         self.action_enter_normal()
 
-        while True:
+        if self.debug_active:
+            self.write_system(log, "Starting communication with Agent.")
+
+        for step in range(
+            MAX_STEPS
+        ):  # loop until finished, but only for max MAX_STEPS to avoid infinite loop
+            if self.debug_active:
+                self.write_system(log, f"Communication iteration {step} with Agent")
+
             # Send request to ollama and wait for response
             response = await ollama.AsyncClient().chat(
                 model=MODEL,
@@ -206,36 +291,65 @@ class ChatApp(App):
             if not msg.tool_calls:
                 break
 
-            # Handle tool calls
-            for call in msg.tool_calls:
-                # Get name and args
-                name = call.function.name
-                args = call.function.arguments
+            # Handle tool calls asynchronously
+            tasks = [
+                self._execute_tool(call, log)
+                for call in msg.tool_calls
+            ]
 
-                self.write_system(log, f"Using tool: {name} ({json.dumps(args)})")
+            results = await asyncio.gather(*tasks)
 
-                # Call tool via session
-                try:
-                    result = await self.session.call_tool(name, args)  # pyright: ignore[reportArgumentType]
-                    result_text = (  # pyright: ignore[reportUnknownVariableType]
-                        result.content[0].text
-                        if result.content and hasattr(result.content[0], "text")
-                        else str(result.content)
-                    )
-                    self.write_system(log, "done")
-                except Exception as e:
-                    result_text = f"Error: {e}"
-                    self.write_system(log, f"{e}")
+            # retrieve all results and append to history
+            for res in results:
+                self.history.append(res)
 
-                self.history.append(
-                    {
-                        "role": "tool",
-                        "content": result_text,
-                    }
-                )
+            self.write_system(log, "All tool calls completed")
+
+            if self.debug_active and step == (MAX_STEPS - 1):
+                self.write_system(log, "Max steps reached. Stopping.")
+
+    async def _execute_tool(self, call: ollama.Message.ToolCall, log: RichLog) -> CommandHistory:
+        """
+        Executes a given tool as requested by the LLM
+
+        Args:
+            call: call object returned by LLM
+            log: log to print the log to
+
+        Returns: Response of service. (CommandHistory type)
+            
+        """
+        name = call.function.name
+        args = call.function.arguments
+
+        self.write_system(log, f"Using tool: {name} ({json.dumps(args)})")
+
+        try:
+            result = await self.session.call_tool(name, args)  # pyright: ignore[reportArgumentType]
+
+            result_text = (
+                result.content[0].text
+                if result.content and hasattr(result.content[0], "text")
+                else str(result.content)
+            )
+
+            if self.debug_active:
+                self.write_system(log, f"{name} → {result_text}")
+
+            return {
+                "role": "tool",
+                "content": result_text,
+            }
+
+        except Exception as e:
+            self.write_system(log, f"{name} failed: {e}")
+            return {
+                "role": "tool",
+                "content": f"Error: {e}",
+            }
 
 
-async def run() -> None:
+async def run(args: Namespace) -> None:
     """
     Starts the MCP Server in the background.
     Gathers the list of tools available within our Agentic AI.
@@ -268,9 +382,21 @@ async def run() -> None:
             ]
 
             # Start TUI (run in background)
-            app = ChatApp(session=session, tools=ollama_tools)
+            app = ChatApp(session=session, tools=ollama_tools, args=args)
             await app.run_async()
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    parser = ArgumentParser()
+    parser.add_argument(
+        "-d",
+        "--debug",
+        action="store_true",
+        dest="debug",
+        default=False,
+        help="Print additional information to the log.",
+    )
+
+    args = parser.parse_args()
+
+    asyncio.run(run(args))
