@@ -6,8 +6,6 @@ Safely evaluates basic math expressions.
 import ast
 import operator
 
-from mcp_server import mcp
-
 SAFE_OPS = {
     ast.Add: operator.add,
     ast.Sub: operator.sub,

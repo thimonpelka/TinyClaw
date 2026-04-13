@@ -55,3 +55,7 @@ Horizontal#footer-outer {
 Horizonal#footer-inner {
     width: 75%;
 }
+
+Label#loadingStatus {
+    margin: 0 1;
+}

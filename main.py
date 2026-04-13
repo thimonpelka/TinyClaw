@@ -48,6 +48,7 @@ class ChatApp(App):
 
     mode: Mode
     debug_active: bool
+    SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
 
     def __init__(
         self, session: ClientSession, tools: list[OllamaTool], args: Namespace, **kwargs
@@ -58,6 +59,10 @@ class ChatApp(App):
         self.history: list[CommandHistory] = []
         self.mode = Mode.NORMAL
         self.debug_active = args.debug  # pyright: ignore[reportAny]
+
+        self.loading = False
+        self.spinner_frame = 0
+        self.spinner_task = None
 
     def write_user(self, log: RichLog, text: str) -> None:
         """
@@ -110,6 +115,7 @@ class ChatApp(App):
         with Vertical():
             yield RichLog(id="log", markup=True, wrap=True)
             yield RichLog(id="tools", markup=True, wrap=True)
+            yield Label("", id="loadingStatus")
             yield Input(placeholder="Type a message and press Enter…")
         with Horizontal(id="footer-outer"):
             yield Label("", id="status")
@@ -142,6 +148,9 @@ class ChatApp(App):
         tools_view = self.query_one("#tools", RichLog)
         tools_view.display = False
 
+        loading_label = self.query_one("#loadingStatus", Label)
+        loading_label.display = False
+
         self.write_system(log, ASCII_LOGO)
 
         if self.debug_active:
@@ -153,6 +162,34 @@ class ChatApp(App):
             self.write_system(log, "No tools loaded (add .py files to plugins/)")
 
         self.write_system(log, f"{self.TITLE} is ready for you! Press 'i' to interact.")
+
+        self.update_status()
+
+    def start_loading(self):
+        self.loading = True
+        self.spinner_frame = 0
+
+        def tick():
+            if not self.loading:
+                return
+
+            label = self.query_one("#loadingStatus", Label)
+            label.display = True
+            frame = self.SPINNER[self.spinner_frame % len(self.SPINNER)]
+            label.update(f"[bold cyan]{frame} Thinking...[/]")
+
+            self.spinner_frame += 1
+
+        self.spinner_task = self.set_interval(0.1, tick)
+
+    def stop_loading(self):
+        self.loading = False
+
+        if self.spinner_task:
+            self.spinner_task.stop()
+            label = self.query_one("#loadingStatus", Label)
+            label.display = False
+            self.spinner_task = None
 
         self.update_status()
 
@@ -264,6 +301,7 @@ class ChatApp(App):
         """
 
         self.action_enter_normal()
+        self.start_loading()
 
         if self.debug_active:
             self.write_system(log, "Starting communication with Agent.")
@@ -281,6 +319,10 @@ class ChatApp(App):
                 tools=self.tools or None,
             )
             msg = response.message
+
+            if self.debug_active:
+                self.write_system(log, str(msg))
+
             self.history.append(msg)  # pyright: ignore[reportArgumentType]
 
             # Print any text content
@@ -307,6 +349,8 @@ class ChatApp(App):
 
             if self.debug_active and step == (MAX_STEPS - 1):
                 self.write_system(log, "Max steps reached. Stopping.")
+
+        self.stop_loading()
 
     async def _execute_tool(self, call: ollama.Message.ToolCall, log: RichLog) -> CommandHistory:
         """

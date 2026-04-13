@@ -5,8 +5,6 @@ Gets the current time
 
 import datetime
 
-from mcp_server import mcp
-
 
 @mcp.tool()
 def get_time() -> str:
