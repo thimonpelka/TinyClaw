@@ -25,7 +25,7 @@ class ChatApp(App):
 
     CSS_PATH = "app.css"
 
-    TITLE = "Mini Claw"
+    TITLE = "TinyClaw"
     SUB_TITLE = "Your personal assistant"
     BINDINGS = [
         ("q", "quit", "Quit"),
