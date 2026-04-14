@@ -2,6 +2,7 @@ import importlib.util
 import logging
 import sys
 from pathlib import Path
+import traceback
 from mcp.server.fastmcp import FastMCP
 
 mcp = FastMCP("agent-tools", log_level='WARNING')
@@ -55,7 +56,8 @@ def load_plugins() -> None:
             spec.loader.exec_module(module)
             logger.info("Loaded plugin: %s", plugin_file.name)
         except Exception as e:
-            logger.info("Failed to load: %s", e)
+            logger.error("Failed to load %s: %s", plugin_file.name, e)
+            traceback.print_exc()
 
 
 load_plugins()

@@ -1,4 +1,6 @@
 import asyncio
+import subprocess
+import httpx
 import json
 import sys
 from argparse import ArgumentParser, Namespace
@@ -20,6 +22,8 @@ SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
 MAX_STEPS = 8
 SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
 
+MAX_HISTORY = 20
+
 ASCII_LOGO = """
 ████████╗██╗███╗   ██╗██╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗
 ╚══██╔══╝██║████╗  ██║╚██╗ ██╔╝██╔════╝██║     ██╔══██╗██║    ██║
@@ -28,6 +32,8 @@ ASCII_LOGO = """
    ██║   ██║██║ ╚████║   ██║   ╚██████╗███████╗██║  ██║╚███╔███╔╝
    ╚═╝   ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ 
 """
+
+OLLAMA_URL = "http://localhost:11434"
 
 
 @final
@@ -44,18 +50,30 @@ class ChatApp(App):
         ("escape", "enter_normal", "Normal mode"),
         ("t", "show_tools", "Show tools"),
         ("c", "clear_chat", "Clear"),
+        ("u", "scroll_up", "Scroll Up"),
+        ("d", "scroll_down", "Scroll Down"),
     ]
 
     mode: Mode
     debug_active: bool
-    SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+    SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    tool_names: list[str] = []
+
+    ollama_ready: bool = False
+    model_ready: bool = False
+    ollama_process: subprocess.Popen[bytes] | None = None
+    ollama_running_locally: bool = True
 
     def __init__(
         self, session: ClientSession, tools: list[OllamaTool], args: Namespace, **kwargs
     ) -> None:
         super().__init__(**kwargs)
         self.session = session
+
         self.tools = tools
+        self.tool_names = [tool["function"]["name"] for tool in tools]
+
         self.history: list[CommandHistory] = []
         self.mode = Mode.NORMAL
         self.debug_active = args.debug  # pyright: ignore[reportAny]
@@ -109,7 +127,7 @@ class ChatApp(App):
         Sets up the TUI Layout and all available Widgets
 
         Yields: TUI Layout
-            
+
         """
         yield Header(show_clock=False, icon="")
         with Vertical():
@@ -121,6 +139,75 @@ class ChatApp(App):
             yield Label("", id="status")
             with Horizontal(id="footer-inner"):
                 yield Footer(show_command_palette=False)
+
+    async def ensure_ollama_running(self, log: RichLog):
+        """
+        Ensure that ollama is running and ready for communication.
+
+        Args:
+            log: log to print info to
+        """
+        self.write_system(log, "Checking availability of ollama...")
+        try:
+            async with httpx.AsyncClient() as client:
+                await client.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+            self.write_system(log, "Ollama is already running. Great!")
+            self.ollama_ready = True
+            return
+        except Exception:
+            self.write_system(log, "Ollama not yet running. Starting Ollama...")
+
+        # Start ollama process
+        self.ollama_process = subprocess.Popen(
+            ["ollama", "serve"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        self.ollama_running_locally = True
+
+        # Wait until it's ready
+        for _ in range(20):
+            try:
+                async with httpx.AsyncClient() as client:
+                    await client.get(f"{OLLAMA_URL}/api/tags", timeout=2)
+                self.write_system(log, "Ollama started successfully!")
+                self.ollama_ready = True
+                return
+            except Exception:
+                await asyncio.sleep(0.5)
+
+        raise RuntimeError("Failed to start Ollama")
+
+    async def ensure_model(self, log: RichLog):
+        """
+        Ensure that the selected model is installed and ready.
+
+        Args:
+            log: log to print info to
+        """
+        self.write_system(log, f"Checking availability of model: {MODEL}")
+
+        models = await ollama.AsyncClient().list()
+        names = [m.model for m in models.models]
+
+        if MODEL in names:
+            self.model_ready = True
+            self.write_system(
+                log, f"Model already installed: {MODEL}. Ready for operations!"
+            )
+            return
+
+        self.write_system(
+            log, f"Model not found. Pulling: {MODEL} (this may take a while...)"
+        )
+
+        # Pull model with progress
+        async for progress in await ollama.AsyncClient().pull(MODEL, stream=True):
+            if progress.status:
+                self.write_system(log, progress.status)
+
+        self.write_system(log, f"Model installation complete: {MODEL}")
+        self.model_ready = True
 
     def update_status(self):
         """
@@ -136,7 +223,43 @@ class ChatApp(App):
         elif self.mode == Mode.TOOLS:
             status.update("[bold magenta]TOOLS[/]")
 
-    def on_mount(self) -> None:
+    def add_to_history(self, new_item: CommandHistory) -> None:
+        """
+        Add an entry to the history. Automatically cuts of the history at max defined length
+
+        Args:
+            new_item: item to add to history
+        """
+
+        self.history.append(new_item)
+
+        if len(self.history) > MAX_HISTORY:
+            # TODO: Possible improvement: Instead of just cutting it we could tell the LLM to summarize the last few history items.
+            # e.g. once it reaches MAX_HISTORY. it should summarize the last 5 messages into one.
+            self.history = self.history[-MAX_HISTORY:]
+
+    async def on_unmount(self) -> None:
+        """
+        Gets called on unmount of app. Shuts down ollama if started by the app.
+        """
+
+        if self.ollama_running_locally and self.ollama_process:
+            print("Shutting down Ollama...")
+
+            try:
+                self.ollama_process.terminate()
+
+                try:
+                    self.ollama_process.wait(timeout=5)
+                    print("Ollama stopped successfully!")
+                except subprocess.TimeoutExpired:
+                    print("Ollama did not stop in time. Killing it...")
+                    self.ollama_process.kill()
+
+            except Exception as e:
+                print(f"Failed to stop Ollama: {e}")
+
+    async def on_mount(self) -> None:
         """
         On mount print the list of tools loaded from the MCP
         """
@@ -161,9 +284,20 @@ class ChatApp(App):
         else:
             self.write_system(log, "No tools loaded (add .py files to plugins/)")
 
-        self.write_system(log, f"{self.TITLE} is ready for you! Press 'i' to interact.")
-
         self.update_status()
+
+        self.run_worker(
+            self._ensure_readiness(log),
+            exclusive=True,  # makes it so that the previous request gets cancelled upon a new request!
+            thread=False,
+        )
+
+    async def _ensure_readiness(self, log: RichLog):
+
+        await self.ensure_ollama_running(log)
+        await self.ensure_model(log)
+
+        self.write_system(log, f"{self.TITLE} is ready for you! Press 'i' to interact.")
 
     def start_loading(self):
         self.loading = True
@@ -205,14 +339,27 @@ class ChatApp(App):
         if self.mode != Mode.INSERT:
             return
 
+        log = self.query_one("#log", RichLog)
+
+        if not self.ollama_ready:
+            self.write_system(
+                log, "Ollama is not yet ready for operations. Please wait..."
+            )
+            return
+
+        if not self.model_ready:
+            self.write_system(
+                log, "The ollama model is not yet ready for operations. Please wait..."
+            )
+            return
+
         text = event.value.strip()
         if not text:
             return
         event.input.value = ""
 
-        log = self.query_one("#log", RichLog)
         self.write_user(log, text)
-        self.history.append({"role": "user", "content": text})
+        self.add_to_history({"role": "user", "content": text})
 
         # Run the agentic loop in a worker so the UI stays responsive
         self.run_worker(
@@ -295,6 +442,32 @@ class ChatApp(App):
         self.history.clear()
         self.query_one("#log", RichLog).clear()
 
+    def action_scroll_up(self):
+        """
+        Action which gets called when the "scroll_up" event is triggered.
+        Scrolls the log up
+        """
+
+        if self.mode == Mode.NORMAL:
+            log = self.query_one("#log")
+            log.scroll_up()
+        elif self.mode == Mode.TOOLS:
+            log = self.query_one("#tools")
+            log.scroll_up()
+
+    def action_scroll_down(self):
+        """
+        Action which gets called when the "scroll_down" event is triggered.
+        Scrolls the log down
+        """
+
+        if self.mode == Mode.NORMAL:
+            log = self.query_one("#log")
+            log.scroll_down()
+        elif self.mode == Mode.TOOLS:
+            log = self.query_one("#tools")
+            log.scroll_down()
+
     async def _agent_turn(self, log: RichLog) -> None:
         """
         Agentic loop: call Ollama, handle tool calls, repeat.
@@ -323,7 +496,7 @@ class ChatApp(App):
             if self.debug_active:
                 self.write_system(log, str(msg))
 
-            self.history.append(msg)  # pyright: ignore[reportArgumentType]
+            self.add_to_history(msg)  # pyright: ignore[reportArgumentType]
 
             # Print any text content
             if msg.content:
@@ -334,16 +507,13 @@ class ChatApp(App):
                 break
 
             # Handle tool calls asynchronously
-            tasks = [
-                self._execute_tool(call, log)
-                for call in msg.tool_calls
-            ]
+            tasks = [self._execute_tool(call, log) for call in msg.tool_calls]
 
             results = await asyncio.gather(*tasks)
 
             # retrieve all results and append to history
             for res in results:
-                self.history.append(res)
+                self.add_to_history(res)
 
             self.write_system(log, "All tool calls completed")
 
@@ -352,7 +522,10 @@ class ChatApp(App):
 
         self.stop_loading()
 
-    async def _execute_tool(self, call: ollama.Message.ToolCall, log: RichLog) -> CommandHistory:
+
+    async def _execute_tool(
+        self, call: ollama.Message.ToolCall, log: RichLog
+    ) -> CommandHistory:
         """
         Executes a given tool as requested by the LLM
 
@@ -361,10 +534,13 @@ class ChatApp(App):
             log: log to print the log to
 
         Returns: Response of service. (CommandHistory type)
-            
+
         """
         name = call.function.name
         args = call.function.arguments
+
+        if name not in self.tool_names:
+            return {"role": "tool", "content": f"Error: Tool '{name}' does not exist"}
 
         self.write_system(log, f"Using tool: {name} ({json.dumps(args)})")
 
