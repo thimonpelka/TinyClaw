@@ -17,7 +17,6 @@ from typing_extensions import final
 
 from custom_types import CommandHistory, OllamaTool, Mode
 
-MODEL = "qwen2.5:7b"  # TODO: change to other ollama models for testing
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
 MAX_STEPS = 8
 SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
@@ -54,6 +53,7 @@ class ChatApp(App):
         ("d", "scroll_down", "Scroll Down"),
     ]
 
+    model = "qwen2.5:7b"  # TODO: change to other ollama models for testing
     mode: Mode
     debug_active: bool
     SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
@@ -78,6 +78,11 @@ class ChatApp(App):
         self.mode = Mode.NORMAL
         self.debug_active = args.debug  # pyright: ignore[reportAny]
 
+        print(args.model)
+        if args.model is not None:
+            print(args.model)
+            self.model = args.model
+
         self.loading = False
         self.spinner_frame = 0
         self.spinner_task = None
@@ -95,7 +100,7 @@ class ChatApp(App):
         log.write(f"[#c0caf5]{text}[/]\n")
         log.scroll_end(animate=False)
 
-    def write_system(self, log: RichLog, text: str):
+    def write_system(self, log: RichLog, text: str) -> None:
         """
         Helper function for system messages
 
@@ -107,7 +112,19 @@ class ChatApp(App):
         log.write(f"[dim]{text}[/dim]\n")
         log.scroll_end(animate=False)
 
-    def write_assistant(self, log: RichLog, text: str):
+    def write_error(self, log: RichLog, text: str) -> None:
+        """
+        Helper function for system errors
+
+        Args:
+            log: log object to print to
+            text: text to print
+        """
+
+        log.write(f"[bold #8B0000]{text}[/bold #8B0000]\n")
+        log.scroll_end(animate=False)
+
+    def write_assistant(self, log: RichLog, text: str) -> None:
         """
         Helper function for messages by the llm ("assistant")
 
@@ -140,7 +157,7 @@ class ChatApp(App):
             with Horizontal(id="footer-inner"):
                 yield Footer(show_command_palette=False)
 
-    async def ensure_ollama_running(self, log: RichLog):
+    async def ensure_ollama_running(self, log: RichLog) -> None:
         """
         Ensure that ollama is running and ready for communication.
 
@@ -178,38 +195,46 @@ class ChatApp(App):
 
         raise RuntimeError("Failed to start Ollama")
 
-    async def ensure_model(self, log: RichLog):
+    async def ensure_model(self, log: RichLog) -> None:
         """
         Ensure that the selected model is installed and ready.
 
         Args:
             log: log to print info to
         """
-        self.write_system(log, f"Checking availability of model: {MODEL}")
+        self.write_system(log, f"Checking availability of model: {self.model}")
 
         models = await ollama.AsyncClient().list()
         names = [m.model for m in models.models]
 
-        if MODEL in names:
+        if self.model in names:
             self.model_ready = True
             self.write_system(
-                log, f"Model already installed: {MODEL}. Ready for operations!"
+                log, f"Model already installed: {self.model}. Ready for operations!"
             )
             return
 
         self.write_system(
-            log, f"Model not found. Pulling: {MODEL} (this may take a while...)"
+            log, f"Model not found. Pulling: {self.model} (this may take a while...)"
         )
 
         # Pull model with progress
-        async for progress in await ollama.AsyncClient().pull(MODEL, stream=True):
-            if progress.status:
-                self.write_system(log, progress.status)
+        try:
+            async for progress in await ollama.AsyncClient().pull(self.model, stream=True):
+                if progress.status:
+                    self.write_system(log, progress.status)
+        except ollama.ResponseError as e:
+            self.write_error(log, "Error while loading model. Please restart with a different model!")
 
-        self.write_system(log, f"Model installation complete: {MODEL}")
+            if self.debug_active:
+                self.write_error(log, f"Error is: {e}")
+
+            return
+
+        self.write_system(log, f"Model installation complete: {self.model}")
         self.model_ready = True
 
-    def update_status(self):
+    def update_status(self) -> None:
         """
         Updates the status bar with the current MODE
         """
@@ -292,18 +317,19 @@ class ChatApp(App):
             thread=False,
         )
 
-    async def _ensure_readiness(self, log: RichLog):
+    async def _ensure_readiness(self, log: RichLog) -> None:
 
         await self.ensure_ollama_running(log)
         await self.ensure_model(log)
 
-        self.write_system(log, f"{self.TITLE} is ready for you! Press 'i' to interact.")
+        if self.ollama_ready and self.model_ready:
+            self.write_system(log, f"{self.TITLE} is ready for you! Press 'i' to interact.")
 
-    def start_loading(self):
+    def start_loading(self) -> None:
         self.loading = True
         self.spinner_frame = 0
 
-        def tick():
+        def tick() -> None:
             if not self.loading:
                 return
 
@@ -316,7 +342,7 @@ class ChatApp(App):
 
         self.spinner_task = self.set_interval(0.1, tick)
 
-    def stop_loading(self):
+    def stop_loading(self) -> None:
         self.loading = False
 
         if self.spinner_task:
@@ -368,7 +394,7 @@ class ChatApp(App):
             thread=False,
         )
 
-    def action_enter_insert(self):
+    def action_enter_insert(self) -> None:
         """
         Action which gets called when the "enter_insert" event is triggered.
         Updates mode. Enables / Disables the required fields / widgets.
@@ -389,7 +415,7 @@ class ChatApp(App):
 
         self.update_status()
 
-    def action_enter_normal(self):
+    def action_enter_normal(self) -> None:
         """
         Action which gets called when the "enter_normal" event is triggered.
         Updates mode. Enables / Disables the required fields / widgets.
@@ -409,7 +435,7 @@ class ChatApp(App):
 
         self.update_status()
 
-    def action_show_tools(self):
+    def action_show_tools(self) -> None:
         """
         Action which gets called when the "show_tools" event is triggered.
         Updates mode. Enables / Disables the required fields / widgets.
@@ -433,7 +459,7 @@ class ChatApp(App):
 
         self.update_status()
 
-    def action_clear_chat(self):
+    def action_clear_chat(self) -> None:
         """
         Action which gets called when the "clear_chat" event is triggered.
         Clears the history and the log.
@@ -442,7 +468,7 @@ class ChatApp(App):
         self.history.clear()
         self.query_one("#log", RichLog).clear()
 
-    def action_scroll_up(self):
+    def action_scroll_up(self) -> None:
         """
         Action which gets called when the "scroll_up" event is triggered.
         Scrolls the log up
@@ -455,7 +481,7 @@ class ChatApp(App):
             log = self.query_one("#tools")
             log.scroll_up()
 
-    def action_scroll_down(self):
+    def action_scroll_down(self) -> None:
         """
         Action which gets called when the "scroll_down" event is triggered.
         Scrolls the log down
@@ -487,7 +513,7 @@ class ChatApp(App):
 
             # Send request to ollama and wait for response
             response = await ollama.AsyncClient().chat(
-                model=MODEL,
+                model=self.model,
                 messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
                 tools=self.tools or None,
             )
@@ -615,6 +641,14 @@ if __name__ == "__main__":
         dest="debug",
         default=False,
         help="Print additional information to the log.",
+    )
+
+    parser.add_argument(
+        "-m",
+        "--model",
+        dest="model",
+        default=None,
+        help="Specifically select a model. Must be a ollama available model",
     )
 
     args = parser.parse_args()
