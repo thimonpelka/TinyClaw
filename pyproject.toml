@@ -11,5 +11,8 @@ dependencies = [
     "textual>=8.2.3",
 ]
 
+[tool.pytest.ini_options]
+pythonpath = ["."]
+
 [tool.pyright]
 reportUnusedCallResult = false
