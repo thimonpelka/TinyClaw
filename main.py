@@ -1,7 +1,9 @@
 import asyncio
 import json
+import os
 import sys
 from argparse import ArgumentParser, Namespace
+from contextlib import AsyncExitStack
 from pathlib import Path
 from typing import override
 
@@ -13,10 +15,22 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Input, RichLog, Label
 from typing_extensions import final
 
-from custom_types import CommandHistory, OllamaTool, Mode
+from auth.oauth import resolve_credentials
+from custom_types import CommandHistory, McpConfig, OllamaTool, Mode
 
 MODEL = "qwen2.5:7b"  # TODO: change to other ollama models for testing
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
+MCP_CONFIG_PATH = Path(__file__).parent / "mcp.json"
+
+
+def load_mcp_config(config_path: Path = MCP_CONFIG_PATH) -> McpConfig:
+    if not config_path.exists():
+        return {"mcpServers": {}}
+    with open(config_path) as f:
+        data = json.load(f)
+    if "mcpServers" not in data:
+        data["mcpServers"] = {}
+    return data
 MAX_STEPS = 8
 SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
 
@@ -51,10 +65,10 @@ class ChatApp(App):
     SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
 
     def __init__(
-        self, session: ClientSession, tools: list[OllamaTool], args: Namespace, **kwargs
+        self, tool_registry: dict[str, ClientSession], tools: list[OllamaTool], args: Namespace, **kwargs
     ) -> None:
         super().__init__(**kwargs)
-        self.session = session
+        self.tool_registry = tool_registry
         self.tools = tools
         self.history: list[CommandHistory] = []
         self.mode = Mode.NORMAL
@@ -368,8 +382,13 @@ class ChatApp(App):
 
         self.write_system(log, f"Using tool: {name} ({json.dumps(args)})")
 
+        session = self.tool_registry.get(name)
+        if session is None:
+            self.write_system(log, f"{name} → unknown tool, skipping")
+            return {"role": "tool", "content": f"Error: unknown tool '{name}'"}
+
         try:
-            result = await self.session.call_tool(name, args)  # pyright: ignore[reportArgumentType]
+            result = await session.call_tool(name, args)  # pyright: ignore[reportArgumentType]
 
             result_text = (
                 result.content[0].text
@@ -395,39 +414,57 @@ class ChatApp(App):
 
 async def run(args: Namespace) -> None:
     """
-    Starts the MCP Server in the background.
-    Gathers the list of tools available within our Agentic AI.
-    Starts the TUI.
+    Loads mcp.json, resolves credentials for each service, connects to all MCP
+    servers (local + external), aggregates their tools, and starts the TUI.
     """
+    config = load_mcp_config()
 
-    server_params = StdioServerParameters(
-        command=sys.executable,
-        args=[str(SERVER_SCRIPT)],
-    )
+    async with AsyncExitStack() as stack:
+        tool_registry: dict[str, ClientSession] = {}
+        all_tools: list[OllamaTool] = []
 
-    async with stdio_client(server_params) as (read, write):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-
-            # Fetch tools from MCP and convert to Ollama format
-            tools_response = await session.list_tools()
-            mcp_tools = tools_response.tools
-
-            ollama_tools: list[OllamaTool] = [
-                {
+        def _register_tools(session: ClientSession, tools_response) -> None:
+            for t in tools_response.tools:
+                if t.name in tool_registry:
+                    print(f"[TinyClaw] Warning: tool '{t.name}' already registered, overwriting.")
+                tool_registry[t.name] = session
+                all_tools.append({
                     "type": "function",
                     "function": {
                         "name": t.name,
                         "description": t.description or "",
                         "parameters": t.inputSchema,
                     },
-                }
-                for t in mcp_tools
-            ]
+                })
 
-            # Start TUI (run in background)
-            app = ChatApp(session=session, tools=ollama_tools, args=args)
-            await app.run_async()
+        # Always connect to the local plugin server first
+        local_params = StdioServerParameters(
+            command=sys.executable,
+            args=[str(SERVER_SCRIPT)],
+        )
+        r, w = await stack.enter_async_context(stdio_client(local_params))
+        local_session = await stack.enter_async_context(ClientSession(r, w))
+        await local_session.initialize()
+        _register_tools(local_session, await local_session.list_tools())
+
+        # Connect to each external service from mcp.json
+        for name, service in config.get("mcpServers", {}).items():
+            env_template = service.get("env", {})
+            resolved_env = resolve_credentials(name, env_template)
+            merged_env = {**os.environ, **resolved_env}
+
+            ext_params = StdioServerParameters(
+                command=service["command"],
+                args=service["args"],
+                env=merged_env,
+            )
+            r, w = await stack.enter_async_context(stdio_client(ext_params))
+            ext_session = await stack.enter_async_context(ClientSession(r, w))
+            await ext_session.initialize()
+            _register_tools(ext_session, await ext_session.list_tools())
+
+        app = ChatApp(tool_registry=tool_registry, tools=all_tools, args=args)
+        await app.run_async()
 
 
 if __name__ == "__main__":
