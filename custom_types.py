@@ -1,4 +1,4 @@
-from typing import TypedDict
+from typing import Any, NotRequired, TypedDict
 from enum import Enum
 
 
@@ -22,3 +22,14 @@ class Mode(str, Enum):
     NORMAL = "normal"
     INSERT = "insert"
     TOOLS = "tools"
+
+
+class McpServiceConfig(TypedDict):
+    command: str
+    args: list[str]
+    env: NotRequired[dict[str, str]]
+
+
+class McpConfig(TypedDict):
+    mcpServers: dict[str, McpServiceConfig]
+    tinyclaw: NotRequired[dict[str, Any]]
