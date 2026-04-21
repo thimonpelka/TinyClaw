@@ -31,6 +31,8 @@ def load_mcp_config(config_path: Path = MCP_CONFIG_PATH) -> McpConfig:
     if "mcpServers" not in data:
         data["mcpServers"] = {}
     return data
+
+
 MAX_STEPS = 8
 SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
 
@@ -62,10 +64,14 @@ class ChatApp(App):
 
     mode: Mode
     debug_active: bool
-    SPINNER = ["⠋","⠙","⠹","⠸","⠼","⠴","⠦","⠧","⠇","⠏"]
+    SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     def __init__(
-        self, tool_registry: dict[str, ClientSession], tools: list[OllamaTool], args: Namespace, **kwargs
+        self,
+        tool_registry: dict[str, ClientSession],
+        tools: list[OllamaTool],
+        args: Namespace,
+        **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.tool_registry = tool_registry
@@ -123,7 +129,7 @@ class ChatApp(App):
         Sets up the TUI Layout and all available Widgets
 
         Yields: TUI Layout
-            
+
         """
         yield Header(show_clock=False, icon="")
         with Vertical():
@@ -348,10 +354,7 @@ class ChatApp(App):
                 break
 
             # Handle tool calls asynchronously
-            tasks = [
-                self._execute_tool(call, log)
-                for call in msg.tool_calls
-            ]
+            tasks = [self._execute_tool(call, log) for call in msg.tool_calls]
 
             results = await asyncio.gather(*tasks)
 
@@ -366,7 +369,9 @@ class ChatApp(App):
 
         self.stop_loading()
 
-    async def _execute_tool(self, call: ollama.Message.ToolCall, log: RichLog) -> CommandHistory:
+    async def _execute_tool(
+        self, call: ollama.Message.ToolCall, log: RichLog
+    ) -> CommandHistory:
         """
         Executes a given tool as requested by the LLM
 
@@ -375,7 +380,7 @@ class ChatApp(App):
             log: log to print the log to
 
         Returns: Response of service. (CommandHistory type)
-            
+
         """
         name = call.function.name
         args = call.function.arguments
@@ -426,16 +431,20 @@ async def run(args: Namespace) -> None:
         def _register_tools(session: ClientSession, tools_response) -> None:
             for t in tools_response.tools:
                 if t.name in tool_registry:
-                    print(f"[TinyClaw] Warning: tool '{t.name}' already registered, overwriting.")
+                    print(
+                        f"[TinyClaw] Warning: tool '{t.name}' already registered, overwriting."
+                    )
                 tool_registry[t.name] = session
-                all_tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": t.name,
-                        "description": t.description or "",
-                        "parameters": t.inputSchema,
-                    },
-                })
+                all_tools.append(
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": t.name,
+                            "description": t.description or "",
+                            "parameters": t.inputSchema,
+                        },
+                    }
+                )
 
         # Always connect to the local plugin server first
         local_params = StdioServerParameters(
@@ -449,19 +458,22 @@ async def run(args: Namespace) -> None:
 
         # Connect to each external service from mcp.json
         for name, service in config.get("mcpServers", {}).items():
-            env_template = service.get("env", {})
-            resolved_env = resolve_credentials(name, env_template)
-            merged_env = {**os.environ, **resolved_env}
+            try:
+                env_template = service.get("env", {})
+                resolved_env = resolve_credentials(name, env_template)
+                merged_env = {**os.environ, **resolved_env}
 
-            ext_params = StdioServerParameters(
-                command=service["command"],
-                args=service["args"],
-                env=merged_env,
-            )
-            r, w = await stack.enter_async_context(stdio_client(ext_params))
-            ext_session = await stack.enter_async_context(ClientSession(r, w))
-            await ext_session.initialize()
-            _register_tools(ext_session, await ext_session.list_tools())
+                ext_params = StdioServerParameters(
+                    command=service["command"],
+                    args=service["args"],
+                    env=merged_env,
+                )
+                r, w = await stack.enter_async_context(stdio_client(ext_params))
+                ext_session = await stack.enter_async_context(ClientSession(r, w))
+                await ext_session.initialize()
+                _register_tools(ext_session, await ext_session.list_tools())
+            except Exception as e:
+                print(f"[TinyClaw] Warning: failed to connect to '{name}': {e}")
 
         app = ChatApp(tool_registry=tool_registry, tools=all_tools, args=args)
         await app.run_async()

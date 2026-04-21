@@ -1,32 +1,20 @@
 {
   "mcpServers": {
-    "gmail": {
+    "fetch": {
       "command": "uvx",
-      "args": ["mcp-server-gmail"],
-      "env": {
-        "GMAIL_CREDENTIALS_FILE": "~/.tinyclaw/gmail_creds.json"
-      }
+      "args": ["mcp-server-fetch"]
     },
-    "google-calendar": {
-      "command": "uvx",
-      "args": ["mcp-server-google-calendar"],
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
       "env": {
-        "GOOGLE_CALENDAR_CREDENTIALS_FILE": "~/.tinyclaw/gcal_creds.json"
-      }
-    },
-    "discord": {
-      "command": "uvx",
-      "args": ["mcp-server-discord"],
-      "env": {
-        "DISCORD_TOKEN": "your-discord-bot-token-here"
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "your GitHub PAT"
       }
     }
   },
   "tinyclaw": {
     "token_ttl": {
-      "gmail": "30d",
-      "google-calendar": "30d",
-      "discord": "forever"
+      "github": "forever"
     }
   }
 }
