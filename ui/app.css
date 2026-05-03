@@ -1,0 +1,61 @@
+Screen {
+    background: #0f111a;
+    color: #c0caf5;
+}
+
+Header {
+    dock: top;
+    background: #1f2335;
+    color: #c0caf5;
+    text-style: bold;
+}
+
+Footer {
+    dock: bottom;
+    background: #1f2335;
+    color: #c0caf5;
+}
+
+#log {
+    border: round #3b4261;
+    padding: 1;
+    margin: 1;
+    background: #161821;
+    color: #c0caf5;
+}
+
+Input {
+    /* dock: bottom; */
+    margin: 1;
+    padding: 0 1;
+    border: round #7aa2f7;
+    background: #1a1b26;
+    color: #ffffff;
+}
+
+#tools {
+    display: none;
+    border: round #bb9af7;
+    margin: 1;
+    padding: 1;
+    background: #161821;
+}
+
+#status {
+    height: 1;
+    padding: 0 1;
+    background: #1f2335;
+}
+
+Horizontal#footer-outer {
+    height: 1;
+    dock: bottom;
+}
+
+Horizonal#footer-inner {
+    width: 75%;
+}
+
+Label#loadingStatus {
+    margin: 0 1;
+}
