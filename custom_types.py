@@ -18,6 +18,13 @@ class CommandHistory(TypedDict):
     content: str
 
 
+class Skill(TypedDict):
+    name: str
+    description: str
+    when_to_use: str
+    content: str
+
+
 class Mode(str, Enum):
     NORMAL = "normal"
     INSERT = "insert"

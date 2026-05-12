@@ -15,13 +15,55 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Input, RichLog, Label
 from typing_extensions import final
 
-from custom_types import CommandHistory, OllamaTool, Mode
+from custom_types import CommandHistory, OllamaTool, Mode, Skill
 
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
+SKILLS_DIR = Path(__file__).parent / "skills"
 MAX_STEPS = 8
-SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
-
 MAX_HISTORY = 20
+
+
+def load_skills() -> list[Skill]:
+    skills: list[Skill] = []
+    if not SKILLS_DIR.exists():
+        return skills
+    for path in sorted(SKILLS_DIR.glob("*.md")):
+        text = path.read_text(encoding="utf-8")
+        if text.startswith("---"):
+            parts = text.split("---", 2)
+            if len(parts) == 3:
+                fm, body = parts[1], parts[2]
+                meta: dict[str, str] = {}
+                for line in fm.strip().splitlines():
+                    if ": " in line:
+                        k, v = line.split(": ", 1)
+                        meta[k.strip()] = v.strip()
+                skills.append(
+                    Skill(
+                        name=meta.get("name", path.stem),
+                        description=meta.get("description", ""),
+                        when_to_use=meta.get("when_to_use", ""),
+                        content=body.strip(),
+                    )
+                )
+    return skills
+
+
+def build_system_prompt(skills: list[Skill]) -> str:
+    base = "You are a helpful assistant. Use tools when they help."
+    if not skills:
+        return base
+    lines = [
+        base,
+        "",
+        "## Available Skills",
+        "Load a skill's full guidance with the `use_skill` tool when relevant.",
+    ]
+    for s in skills:
+        lines.append(
+            f"- **{s['name']}**: {s['description']} (use when: {s['when_to_use']})"
+        )
+    return "\n".join(lines)
 
 ASCII_LOGO = """
 ████████╗██╗███╗   ██╗██╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗
@@ -66,7 +108,13 @@ class ChatApp(App):
     ollama_running_locally: bool = True
 
     def __init__(
-        self, session: ClientSession, tools: list[OllamaTool], args: Namespace, **kwargs
+        self,
+        session: ClientSession,
+        tools: list[OllamaTool],
+        args: Namespace,
+        system_prompt: str,
+        skills: list[Skill],
+        **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.session = session
@@ -77,6 +125,10 @@ class ChatApp(App):
         self.history: list[CommandHistory] = []
         self.mode = Mode.NORMAL
         self.debug_active = args.debug  # pyright: ignore[reportAny]
+
+        self.system_prompt = system_prompt
+        self.skills = skills
+        self._pending_skill: str | None = None
 
         print(args.model)
         if args.model is not None:
@@ -384,8 +436,19 @@ class ChatApp(App):
             return
         event.input.value = ""
 
+        if text.startswith("/"):
+            await self._handle_slash_command(text[1:], log)
+            return
+
         self.write_user(log, text)
-        self.add_to_history({"role": "user", "content": text})
+
+        if self._pending_skill:
+            full_text = f"{self._pending_skill}\n\n---\n\n{text}"
+            self._pending_skill = None
+        else:
+            full_text = text
+
+        self.add_to_history({"role": "user", "content": full_text})
 
         # Run the agentic loop in a worker so the UI stays responsive
         self.run_worker(
@@ -393,6 +456,26 @@ class ChatApp(App):
             exclusive=True,  # makes it so that the previous request gets cancelled upon a new request!
             thread=False,
         )
+
+    async def _handle_slash_command(self, command: str, log: RichLog) -> None:
+        if command == "skills":
+            if not self.skills:
+                self.write_system(log, "No skills loaded (add .md files to skills/)")
+                return
+            self.write_system(log, "Available skills:")
+            for s in self.skills:
+                log.write(f"  [cyan]/{s['name']}[/cyan] — {s['description']}")
+            return
+
+        match = next((s for s in self.skills if s["name"] == command), None)
+        if match:
+            self._pending_skill = f"# [Skill: {match['name']}]\n{match['content']}"
+            self.write_system(
+                log,
+                f"Skill [cyan]{match['name']}[/cyan] loaded — prepended to your next message.",
+            )
+        else:
+            self.write_error(log, f"Unknown command: /{command}")
 
     def action_enter_insert(self) -> None:
         """
@@ -514,7 +597,7 @@ class ChatApp(App):
             # Send request to ollama and wait for response
             response = await ollama.AsyncClient().chat(
                 model=self.model,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
+                messages=[{"role": "system", "content": self.system_prompt}] + self.history,
                 tools=self.tools or None,
             )
             msg = response.message
@@ -627,8 +710,17 @@ async def run(args: Namespace) -> None:
                 for t in mcp_tools
             ]
 
+            skills = load_skills()
+            system_prompt = build_system_prompt(skills)
+
             # Start TUI (run in background)
-            app = ChatApp(session=session, tools=ollama_tools, args=args)
+            app = ChatApp(
+                session=session,
+                tools=ollama_tools,
+                args=args,
+                system_prompt=system_prompt,
+                skills=skills,
+            )
             await app.run_async()
 
 
