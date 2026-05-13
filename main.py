@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import subprocess
 import httpx
 import json
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import override
 
 import ollama
+from rich.text import Text
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from textual.app import App, ComposeResult
@@ -21,6 +23,21 @@ SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
 SKILLS_DIR = Path(__file__).parent / "skills"
 MAX_STEPS = 8
 MAX_HISTORY = 20
+
+SKILL_BADGE_COLORS = [
+    "#7aa2f7",  # blue
+    "#9ece6a",  # green
+    "#e0af68",  # yellow
+    "#bb9af7",  # purple
+    "#f7768e",  # red
+    "#2ac3de",  # cyan
+    "#ff9e64",  # orange
+]
+
+
+def _skill_color(name: str) -> str:
+    idx = int(hashlib.md5(name.encode()).hexdigest(), 16) % len(SKILL_BADGE_COLORS)
+    return SKILL_BADGE_COLORS[idx]
 
 
 def load_skills() -> list[Skill]:
@@ -90,6 +107,7 @@ class ChatApp(App):
         ("i", "enter_insert", "Insert mode"),
         ("escape", "enter_normal", "Normal mode"),
         ("t", "show_tools", "Show tools"),
+        ("s", "show_skills", "Skills"),
         ("c", "clear_chat", "Clear"),
         ("u", "scroll_up", "Scroll Up"),
         ("d", "scroll_down", "Scroll Down"),
@@ -128,7 +146,7 @@ class ChatApp(App):
 
         self.system_prompt = system_prompt
         self.skills = skills
-        self._pending_skill: str | None = None
+        self._active_skills: list[str] = []
 
         print(args.model)
         if args.model is not None:
@@ -204,6 +222,7 @@ class ChatApp(App):
             yield RichLog(id="tools", markup=True, wrap=True)
             yield Label("", id="loadingStatus")
             yield Input(placeholder="Type a message and press Enter…")
+            yield Label("", id="skillsStatus")
         with Horizontal(id="footer-outer"):
             yield Label("", id="status")
             with Horizontal(id="footer-inner"):
@@ -351,6 +370,10 @@ class ChatApp(App):
         loading_label = self.query_one("#loadingStatus", Label)
         loading_label.display = False
 
+        self.query_one("#skillsStatus", Label).update(
+            "[dim]No active skills  ·  press s to browse  ·  /skill-name to activate[/dim]"
+        )
+
         self.write_system(log, ASCII_LOGO)
 
         if self.debug_active:
@@ -440,42 +463,98 @@ class ChatApp(App):
             await self._handle_slash_command(text[1:], log)
             return
 
-        self.write_user(log, text)
+        prefix = self._build_skill_prefix(self._active_skills)
+        full_text = f"{prefix}\n\n---\n\n{text}" if prefix else text
+        self._send_message(text, full_text, log)
 
-        if self._pending_skill:
-            full_text = f"{self._pending_skill}\n\n---\n\n{text}"
-            self._pending_skill = None
-        else:
-            full_text = text
-
+    def _send_message(self, display_text: str, full_text: str, log: RichLog) -> None:
+        self.write_user(log, display_text)
         self.add_to_history({"role": "user", "content": full_text})
-
-        # Run the agentic loop in a worker so the UI stays responsive
         self.run_worker(
             self._agent_turn(log),
-            exclusive=True,  # makes it so that the previous request gets cancelled upon a new request!
+            exclusive=True,
             thread=False,
         )
 
+    def _build_skill_prefix(self, names: list[str]) -> str:
+        parts = []
+        for name in names:
+            skill = next((s for s in self.skills if s["name"] == name), None)
+            if skill:
+                parts.append(f"# [Skill: {name}]\n{skill['content']}")
+        return "\n\n---\n\n".join(parts)
+
+    def _update_skills_indicator(self) -> None:
+        label = self.query_one("#skillsStatus", Label)
+        if self._active_skills:
+            text = Text()
+            for i, name in enumerate(self._active_skills):
+                if i > 0:
+                    text.append("  ")
+                text.append(f" {name} ", style=f"bold {_skill_color(name)}")
+            label.update(text)
+        else:
+            label.update(
+                "[dim]No active skills  ·  press s to browse  ·  /skill-name to activate[/dim]"
+            )
+
     async def _handle_slash_command(self, command: str, log: RichLog) -> None:
+        # /skills — list available
         if command == "skills":
             if not self.skills:
                 self.write_system(log, "No skills loaded (add .md files to skills/)")
                 return
             self.write_system(log, "Available skills:")
             for s in self.skills:
-                log.write(f"  [cyan]/{s['name']}[/cyan] — {s['description']}")
+                color = _skill_color(s["name"])
+                log.write(f"  [bold {color}][ {s['name']} ][/] — {s['description']}")
             return
 
-        match = next((s for s in self.skills if s["name"] == command), None)
-        if match:
-            self._pending_skill = f"# [Skill: {match['name']}]\n{match['content']}"
+        # /disable-skills [skill-name]
+        if command == "disable-skills" or command.startswith("disable-skills "):
+            parts = command.split(" ", 1)
+            if len(parts) == 1:
+                self._active_skills.clear()
+                self.write_system(log, "All skills deactivated.")
+            else:
+                name = parts[1].strip()
+                if name in self._active_skills:
+                    self._active_skills.remove(name)
+                    self.write_system(log, f"Skill [cyan]{name}[/cyan] deactivated.")
+                else:
+                    self.write_error(log, f"Skill '{name}' is not currently active.")
+            self._update_skills_indicator()
+            return
+
+        # /skill-name [inline message]
+        parts = command.split(" ", 1)
+        skill_name = parts[0]
+        inline_message = parts[1].strip() if len(parts) > 1 else None
+
+        skill = next((s for s in self.skills if s["name"] == skill_name), None)
+        if skill is None:
+            self.write_error(log, f"Unknown command: /{command}")
+            return
+
+        if inline_message:
+            # One-shot: persistent skills + this inline skill for this message only
+            names_for_message = self._active_skills + [skill_name]
+            prefix = self._build_skill_prefix(names_for_message)
+            full_text = f"{prefix}\n\n---\n\n{inline_message}"
+            color = _skill_color(skill_name)
+            display_text = f"[bold {color}][ {skill_name} ][/] {inline_message}"
+            self._send_message(display_text, full_text, log)
+        else:
+            # Persistent: add to active skills
+            if skill_name in self._active_skills:
+                self.write_error(log, f"Skill '{skill_name}' is already active.")
+                return
+            self._active_skills.append(skill_name)
             self.write_system(
                 log,
-                f"Skill [cyan]{match['name']}[/cyan] loaded — prepended to your next message.",
+                f"Skill [cyan]{skill_name}[/cyan] activated — prepended to all future messages.",
             )
-        else:
-            self.write_error(log, f"Unknown command: /{command}")
+            self._update_skills_indicator()
 
     def action_enter_insert(self) -> None:
         """
@@ -541,6 +620,27 @@ class ChatApp(App):
             self.write_system(tools_view, json.dumps(fn["parameters"], indent=2))
 
         self.update_status()
+
+    def action_show_skills(self) -> None:
+        log = self.query_one("#log", RichLog)
+        tools_view = self.query_one("#tools")
+
+        tools_view.display = False
+        log.display = True
+
+        if not self.skills:
+            self.write_system(log, "No skills loaded (add .md files to skills/)")
+            return
+
+        self.write_system(log, "Available skills  (active skills are highlighted):")
+        for s in self.skills:
+            color = _skill_color(s["name"])
+            active_marker = " ●" if s["name"] in self._active_skills else ""
+            log.write(
+                f"  [bold {color}][ {s['name']}{active_marker} ][/]"
+                f" — {s['description']}"
+                f"  [dim](use when: {s['when_to_use']})[/dim]"
+            )
 
     def action_clear_chat(self) -> None:
         """
