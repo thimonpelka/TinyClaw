@@ -59,3 +59,10 @@ Horizonal#footer-inner {
 Label#loadingStatus {
     margin: 0 1;
 }
+
+Label#skillsStatus {
+    height: 1;
+    padding: 0 1;
+    margin: 0 1;
+    color: $text-muted;
+}

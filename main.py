@@ -16,11 +16,12 @@ from textual.widgets import Footer, Header, Input, RichLog, Label
 from typing_extensions import final
 
 from custom_types import CommandHistory, OllamaTool, Mode
+from features.commands import CommandContext, CommandRegistry, register_all_commands
+from features.skills import SkillsManager
 
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
+SKILLS_DIR = Path(__file__).parent / "skill-definitions"
 MAX_STEPS = 8
-SYSTEM_PROMPT = "You are a helpful assistant. Use tools when they help."
-
 MAX_HISTORY = 20
 
 ASCII_LOGO = """
@@ -48,6 +49,7 @@ class ChatApp(App):
         ("i", "enter_insert", "Insert mode"),
         ("escape", "enter_normal", "Normal mode"),
         ("t", "show_tools", "Show tools"),
+        ("s", "show_skills", "Skills"),
         ("c", "clear_chat", "Clear"),
         ("u", "scroll_up", "Scroll Up"),
         ("d", "scroll_down", "Scroll Down"),
@@ -66,7 +68,11 @@ class ChatApp(App):
     ollama_running_locally: bool = True
 
     def __init__(
-        self, session: ClientSession, tools: list[OllamaTool], args: Namespace, **kwargs
+        self,
+        session: ClientSession,
+        tools: list[OllamaTool],
+        args: Namespace,
+        **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.session = session
@@ -77,6 +83,10 @@ class ChatApp(App):
         self.history: list[CommandHistory] = []
         self.mode = Mode.NORMAL
         self.debug_active = args.debug  # pyright: ignore[reportAny]
+
+        self.skills_manager = SkillsManager(SKILLS_DIR)
+        self.registry = CommandRegistry()
+        register_all_commands(self.registry)
 
         print(args.model)
         if args.model is not None:
@@ -152,6 +162,7 @@ class ChatApp(App):
             yield RichLog(id="tools", markup=True, wrap=True)
             yield Label("", id="loadingStatus")
             yield Input(placeholder="Type a message and press Enter…")
+            yield Label("", id="skillsStatus")
         with Horizontal(id="footer-outer"):
             yield Label("", id="status")
             with Horizontal(id="footer-inner"):
@@ -299,6 +310,9 @@ class ChatApp(App):
         loading_label = self.query_one("#loadingStatus", Label)
         loading_label.display = False
 
+        self.skills_manager.load()
+        self.query_one("#skillsStatus", Label).update(self.skills_manager.indicator_text())
+
         self.write_system(log, ASCII_LOGO)
 
         if self.debug_active:
@@ -308,6 +322,12 @@ class ChatApp(App):
             self.write_system(log, f"Succesfully loaded tools: {', '.join(tool_names)}")
         else:
             self.write_system(log, "No tools loaded (add .py files to plugins/)")
+
+        skill_count = len(self.skills_manager.skills)
+        if skill_count:
+            self.write_system(log, f"Loaded {skill_count} skill(s). Press 's' to browse.")
+        else:
+            self.write_system(log, "No skills loaded (add .md files to skill-definitions/)")
 
         self.update_status()
 
@@ -384,15 +404,36 @@ class ChatApp(App):
             return
         event.input.value = ""
 
-        self.write_user(log, text)
-        self.add_to_history({"role": "user", "content": text})
+        if text.startswith("/"):
+            ctx = CommandContext(
+                log=log,
+                write_system=lambda t: self.write_system(log, t),
+                write_error=lambda t: self.write_error(log, t),
+                send_message=lambda display, full: self._send_message(display, full, log),
+                update_indicator=self._update_skills_indicator,
+                skills=self.skills_manager,
+            )
+            handled = await self.registry.dispatch(text[1:], ctx)
+            if not handled:
+                self.write_error(log, f"Unknown command: {text}")
+            return
 
-        # Run the agentic loop in a worker so the UI stays responsive
+        prefix = self.skills_manager.build_prefix()
+        full_text = f"{prefix}\n\n---\n\n{text}" if prefix else text
+        self._send_message(text, full_text, log)
+
+    def _send_message(self, display_text: str, full_text: str, log: RichLog) -> None:
+        self.write_user(log, display_text)
+        self.add_to_history({"role": "user", "content": full_text})
         self.run_worker(
             self._agent_turn(log),
-            exclusive=True,  # makes it so that the previous request gets cancelled upon a new request!
+            exclusive=True,
             thread=False,
         )
+
+    def _update_skills_indicator(self) -> None:
+        label = self.query_one("#skillsStatus", Label)
+        label.update(self.skills_manager.indicator_text())
 
     def action_enter_insert(self) -> None:
         """
@@ -459,6 +500,21 @@ class ChatApp(App):
 
         self.update_status()
 
+    def action_show_skills(self) -> None:
+        log = self.query_one("#log", RichLog)
+        tools_view = self.query_one("#tools")
+
+        tools_view.display = False
+        log.display = True
+
+        if not self.skills_manager.skills:
+            self.write_system(log, "No skills loaded (add .md files to skill-definitions/)")
+            return
+
+        self.write_system(log, "Available skills (● = active):")
+        for badge, desc, when in self.skills_manager.list_renderables():
+            log.write(f"  {badge} — {desc}  [dim](use when: {when})[/dim]")
+
     def action_clear_chat(self) -> None:
         """
         Action which gets called when the "clear_chat" event is triggered.
@@ -514,7 +570,7 @@ class ChatApp(App):
             # Send request to ollama and wait for response
             response = await ollama.AsyncClient().chat(
                 model=self.model,
-                messages=[{"role": "system", "content": SYSTEM_PROMPT}] + self.history,
+                messages=[{"role": "system", "content": self.skills_manager.system_prompt()}] + self.history,
                 tools=self.tools or None,
             )
             msg = response.message
@@ -628,7 +684,11 @@ async def run(args: Namespace) -> None:
             ]
 
             # Start TUI (run in background)
-            app = ChatApp(session=session, tools=ollama_tools, args=args)
+            app = ChatApp(
+                session=session,
+                tools=ollama_tools,
+                args=args,
+            )
             await app.run_async()
 
 

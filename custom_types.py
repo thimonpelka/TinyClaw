@@ -18,6 +18,7 @@ class CommandHistory(TypedDict):
     content: str
 
 
+
 class Mode(str, Enum):
     NORMAL = "normal"
     INSERT = "insert"
