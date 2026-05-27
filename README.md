@@ -80,6 +80,7 @@ Type a `/` command in the input box and press Enter. Commands are available in I
 
 | Command | Description |
 |---------|-------------|
+| `/compact` | Summarize your active chat history, to free up tokens in your context window while retaining key project details  |
 | `/skills` | List all available skills and their active state |
 | `/<skill-name>` | Activate a skill — it will be prepended to all future messages |
 | `/<skill-name> <message>` | Use a skill for this one message only (inline, one-shot) |

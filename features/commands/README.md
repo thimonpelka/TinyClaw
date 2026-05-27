@@ -86,6 +86,7 @@ All built-in commands are registered via `register_all_commands(registry)`:
 |---------|---------|-------------|
 | `/skills` | `handle_list_skills` | Lists all loaded skills with active state indicators. |
 | `/disable-skills [name]` | `handle_disable_skills` | Deactivates a named skill, or all skills if no name given. |
+| `/compact [N|all]` | `handle_compact` | Summarizes chat history into a single entry, replacing the last N messages to free tokens (default: all — summarizes the entire history). The produced summary is stored as an assistant message. |
 | `/<skill-name>` | `handle_skill_by_name` (fallback) | Activates a skill persistently, or sends an inline one-shot message if text follows the name. |
 
 ### `/skills`
