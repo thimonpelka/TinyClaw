@@ -1,3 +1,4 @@
+from features.commands.handlers.memory_commands import handle_create_memory
 from features.commands.handlers.skills_commands import (
     handle_disable_skills,
     handle_list_skills,
@@ -16,6 +17,11 @@ def register_all_commands(registry: CommandRegistry) -> None:
         name="disable-skills",
         description="Deactivate a named skill, or all skills if no name given",
         handler=handle_disable_skills,
+    ))
+    registry.register(Command(
+        name="create-memory",
+        description="Ask the agent to save a memory. Usage: /create-memory <what to remember>",
+        handler=handle_create_memory,
     ))
     registry.register_fallback(Command(
         name="_skill_fallback",
