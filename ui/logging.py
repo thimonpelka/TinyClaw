@@ -16,3 +16,8 @@ def write_assistant(log: RichLog, text: str) -> None:
     log.write("\n[bold #9ece6a]TINYCLAW[/bold #9ece6a]")
     log.write(f"[#c0caf5]{text}[/]\n")
     log.scroll_end(animate=False)
+
+
+def write_error(log: RichLog, text: str) -> None:
+    log.write(f"[bold #8B0000]{text}[/bold #8B0000]\n")
+    log.scroll_end(animate=False)

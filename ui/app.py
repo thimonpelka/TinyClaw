@@ -1,5 +1,6 @@
 import json
 from argparse import Namespace
+from pathlib import Path
 from typing import override
 
 from mcp import ClientSession
@@ -11,8 +12,12 @@ from typing_extensions import final
 from agent.agent import Agent
 from config import ASCII_LOGO, MODEL, PROVIDER, SYSTEM_PROMPT
 from custom_types import Mode, OllamaTool
+from features.commands import CommandContext, CommandRegistry, register_all_commands
+from features.skills import SkillsManager
 from llm.llm import LLMClient
-from ui.logging import write_assistant, write_system, write_user
+from ui.logging import write_assistant, write_error, write_system, write_user
+
+SKILLS_DIR = Path(__file__).parent.parent / "skill-definitions"
 
 
 @final
@@ -27,7 +32,10 @@ class ChatApp(App):
         ("i", "enter_insert", "Insert mode"),
         ("escape", "enter_normal", "Normal mode"),
         ("t", "show_tools", "Show tools"),
+        ("s", "show_skills", "Skills"),
         ("c", "clear_chat", "Clear"),
+        ("u", "scroll_up", "Scroll Up"),
+        ("d", "scroll_down", "Scroll Down"),
     ]
     SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
@@ -57,6 +65,10 @@ class ChatApp(App):
         self.spinner_frame = 0
         self.spinner_task = None
 
+        self.skills_manager = SkillsManager(SKILLS_DIR)
+        self.registry = CommandRegistry()
+        register_all_commands(self.registry)
+
     @override
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False, icon="")
@@ -65,6 +77,7 @@ class ChatApp(App):
             yield RichLog(id="tools", markup=True, wrap=True)
             yield Label("", id="loadingStatus")
             yield Input(placeholder="Type a message and press Enter…")
+            yield Label("", id="skillsStatus")
         with Horizontal(id="footer-outer"):
             yield Label("", id="status")
             with Horizontal(id="footer-inner"):
@@ -75,6 +88,11 @@ class ChatApp(App):
         self.query_one("#tools", RichLog).display = False
         self.query_one("#loadingStatus", Label).display = False
 
+        self.skills_manager.load()
+        self.query_one("#skillsStatus", Label).update(
+            self.skills_manager.indicator_text()
+        )
+
         write_system(log, ASCII_LOGO)
         if self.debug_active:
             write_system(log, "Debug mode is active. Expect detailed logs.")
@@ -84,6 +102,13 @@ class ChatApp(App):
             write_system(log, f"Successfully loaded tools: {', '.join(tool_names)}")
         else:
             write_system(log, "No tools loaded (add .py files to plugins/)")
+
+        skill_count = len(self.skills_manager.skills)
+        if skill_count:
+            write_system(log, f"Loaded {skill_count} skill(s). Press 's' to browse.")
+        else:
+            write_system(log, "No skills loaded (add .md files to skill-definitions/)")
+
         write_system(log, f"{self.TITLE} is ready for you! Press 'i' to interact.")
         self._update_status()
 
@@ -97,12 +122,36 @@ class ChatApp(App):
 
         event.input.value = ""
         log = self.query_one("#log", RichLog)
-        write_user(log, text)
 
+        if text.startswith("/"):
+            ctx = CommandContext(
+                log=log,
+                write_system=lambda t: write_system(log, t),
+                write_error=lambda t: write_error(log, t),
+                send_message=lambda display, full: self._send_message(display, full, log),
+                update_indicator=self._update_skills_indicator,
+                skills=self.skills_manager,
+            )
+            handled = await self.registry.dispatch(text[1:], ctx)
+            if not handled:
+                write_error(log, f"Unknown command: {text}")
+            return
+
+        prefix = self.skills_manager.build_prefix()
+        full_text = f"{prefix}\n\n---\n\n{text}" if prefix else text
+        self._send_message(text, full_text, log)
+
+    def _send_message(self, display_text: str, full_text: str, log: RichLog) -> None:
+        write_user(log, display_text)
         self.run_worker(
-            self._agent_turn(text, log),
+            self._agent_turn(full_text, log),
             exclusive=True,
             thread=False,
+        )
+
+    def _update_skills_indicator(self) -> None:
+        self.query_one("#skillsStatus", Label).update(
+            self.skills_manager.indicator_text()
         )
 
     def action_enter_insert(self) -> None:
@@ -139,9 +188,33 @@ class ChatApp(App):
 
         self._update_status()
 
+    def action_show_skills(self) -> None:
+        log = self.query_one("#log", RichLog)
+        self._show_chat_log()
+
+        if not self.skills_manager.skills:
+            write_system(log, "No skills loaded (add .md files to skill-definitions/)")
+            return
+
+        write_system(log, "Available skills (● = active):")
+        for badge, desc, when in self.skills_manager.list_renderables():
+            log.write(f"  {badge} — {desc}  [dim](use when: {when})[/dim]")
+
     def action_clear_chat(self) -> None:
         self.agent.clear_history()
         self.query_one("#log", RichLog).clear()
+
+    def action_scroll_up(self) -> None:
+        if self.mode == Mode.NORMAL:
+            self.query_one("#log").scroll_up()
+        elif self.mode == Mode.TOOLS:
+            self.query_one("#tools").scroll_up()
+
+    def action_scroll_down(self) -> None:
+        if self.mode == Mode.NORMAL:
+            self.query_one("#log").scroll_down()
+        elif self.mode == Mode.TOOLS:
+            self.query_one("#tools").scroll_down()
 
     async def _agent_turn(self, user_message: str, log: RichLog) -> None:
         self.action_enter_normal()
