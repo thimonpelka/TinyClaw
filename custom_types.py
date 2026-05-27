@@ -19,6 +19,7 @@ class CommandHistory(TypedDict):
     tool_call_id: NotRequired[str]
 
 
+
 class Mode(str, Enum):
     NORMAL = "normal"
     INSERT = "insert"
