@@ -1,53 +1,15 @@
 # TinyClaw
 
-A terminal-based AI chat application that connects a local [Ollama](https://ollama.com) LLM to tools via the [Model Context Protocol (MCP)](https://modelcontextprotocol.io). Built with [Textual](https://textual.textualize.io).
+You can use a local LLM - install ollama qwen3.5:4b
 
-```
-████████╗██╗███╗   ██╗██╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗
-╚══██╔══╝██║████╗  ██║╚██╗ ██╔╝██╔════╝██║     ██╔══██╗██║    ██║
-   ██║   ██║██╔██╗ ██║ ╚████╔╝ ██║     ██║     ███████║██║ █╗ ██║
-   ██║   ██║██║╚██╗██║  ╚██╔╝  ██║     ██║     ██╔══██║██║███╗██║
-   ██║   ██║██║ ╚████║   ██║   ╚██████╗███████╗██║  ██║╚███╔███╔╝
-   ╚═╝   ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝
-```
+Or use a free hosted LLM - from https://openrouter.ai
+Do this by 1st creating an account. 2nd click 'Get API Key'. 3rd set Credit limit to 0. copy API Key. create .env in same dir as main and add API Keys as displayed in .env.example
 
-## Features
+Either way update PROVIDER and MODEL in config.py (choose a currently free model from https://openrouter.ai if this option is used)
 
-- **Local LLM via Ollama** — no cloud, no API keys, runs entirely on your machine
-- **MCP tool integration** — agentic loop with parallel tool execution
-- **Plugin system** — add new tools by dropping a `.py` file into `plugins/`
-- **Skills system** — define reusable behavioral guidance in `.md` files
-- **Vim-inspired UI** — modal keyboard navigation (Normal / Insert / Tools)
-- **Auto-manages Ollama** — starts and stops `ollama serve` automatically if not running
-- **Auto-pulls models** — downloads the selected model on first run if not installed
 
-## Quick Start
+Start TinyClaw by
 
-**1. Install prerequisites**
-
-- [Ollama](https://ollama.com/download) — install and make sure the `ollama` command is available in your terminal
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) — Python package manager used to run the app
-
-**2. Clone and install dependencies**
-
-```bash
-git clone <repo-url>
-cd TinyClaw
-uv sync
-```
-
-**3. Run**
-
-```bash
-uv run main.py
-```
-
-On first run, TinyClaw starts the Ollama server (if not already running) and downloads the default model (`qwen2.5:7b`). Once the status bar shows the model is ready, press `i` to enter Insert mode and start chatting.
-
-## Running the App
-
-```bash
-# Default model (qwen2.5:7b)
 uv run main.py
 
 # Use a different Ollama model

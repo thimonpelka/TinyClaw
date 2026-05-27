@@ -5,13 +5,9 @@ from pathlib import Path
 import traceback
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("agent-tools", log_level='WARNING')
+mcp = FastMCP("agent-tools", log_level="WARNING")
 
 PLUGINS_DIR = Path(__file__).parent / "plugins"
-
-# MCP Server
-# Auto-loads plugins from /plugins directory
-# Each file is supposed to be one self-contained tool definition
 
 logger = logging.getLogger("mcp-server")
 logger.setLevel(logging.INFO)
@@ -40,8 +36,8 @@ def load_plugins() -> None:
         spec = importlib.util.spec_from_file_location(module_name, plugin_file)
 
         if spec is None:
-            logger.info("Could not load spec from file. Skipping Plugin: %s", plugin_file)
-            break
+            logger.info("Could not load spec from file. Skipping plugin: %s", plugin_file)
+            continue
 
         module = importlib.util.module_from_spec(spec)
 
@@ -50,8 +46,8 @@ def load_plugins() -> None:
 
         try:
             if spec.loader is None:
-                logger.info("Loader of spec is null. Skipping Plugin: %s", plugin_file)
-                break
+                logger.info("Loader of spec is null. Skipping plugin: %s", plugin_file)
+                continue
 
             spec.loader.exec_module(module)
             logger.info("Loaded plugin: %s", plugin_file.name)
