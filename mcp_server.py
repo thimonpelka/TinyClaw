@@ -5,7 +5,7 @@ from pathlib import Path
 import traceback
 from mcp.server.fastmcp import FastMCP
 
-mcp = FastMCP("agent-tools", log_level='WARNING')
+mcp = FastMCP("agent-tools", log_level="WARNING")
 
 PLUGINS_DIR = Path(__file__).parent / "plugins"
 
@@ -40,7 +40,9 @@ def load_plugins() -> None:
         spec = importlib.util.spec_from_file_location(module_name, plugin_file)
 
         if spec is None:
-            logger.info("Could not load spec from file. Skipping Plugin: %s", plugin_file)
+            logger.info(
+                "Could not load spec from file. Skipping Plugin: %s", plugin_file
+            )
             break
 
         module = importlib.util.module_from_spec(spec)

@@ -231,11 +231,15 @@ class ChatApp(App):
 
         # Pull model with progress
         try:
-            async for progress in await ollama.AsyncClient().pull(self.model, stream=True):
+            async for progress in await ollama.AsyncClient().pull(
+                self.model, stream=True
+            ):
                 if progress.status:
                     self.write_system(log, progress.status)
         except ollama.ResponseError as e:
-            self.write_error(log, "Error while loading model. Please restart with a different model!")
+            self.write_error(
+                log, "Error while loading model. Please restart with a different model!"
+            )
 
             if self.debug_active:
                 self.write_error(log, f"Error is: {e}")
@@ -311,7 +315,9 @@ class ChatApp(App):
         loading_label.display = False
 
         self.skills_manager.load()
-        self.query_one("#skillsStatus", Label).update(self.skills_manager.indicator_text())
+        self.query_one("#skillsStatus", Label).update(
+            self.skills_manager.indicator_text()
+        )
 
         self.write_system(log, ASCII_LOGO)
 
@@ -325,9 +331,13 @@ class ChatApp(App):
 
         skill_count = len(self.skills_manager.skills)
         if skill_count:
-            self.write_system(log, f"Loaded {skill_count} skill(s). Press 's' to browse.")
+            self.write_system(
+                log, f"Loaded {skill_count} skill(s). Press 's' to browse."
+            )
         else:
-            self.write_system(log, "No skills loaded (add .md files to skill-definitions/)")
+            self.write_system(
+                log, "No skills loaded (add .md files to skill-definitions/)"
+            )
 
         self.update_status()
 
@@ -343,7 +353,9 @@ class ChatApp(App):
         await self.ensure_model(log)
 
         if self.ollama_ready and self.model_ready:
-            self.write_system(log, f"{self.TITLE} is ready for you! Press 'i' to interact.")
+            self.write_system(
+                log, f"{self.TITLE} is ready for you! Press 'i' to interact."
+            )
 
     def start_loading(self) -> None:
         self.loading = True
@@ -409,7 +421,9 @@ class ChatApp(App):
                 log=log,
                 write_system=lambda t: self.write_system(log, t),
                 write_error=lambda t: self.write_error(log, t),
-                send_message=lambda display, full: self._send_message(display, full, log),
+                send_message=lambda display, full: self._send_message(
+                    display, full, log
+                ),
                 update_indicator=self._update_skills_indicator,
                 skills=self.skills_manager,
                 extras={"app": self},
@@ -509,7 +523,9 @@ class ChatApp(App):
         log.display = True
 
         if not self.skills_manager.skills:
-            self.write_system(log, "No skills loaded (add .md files to skill-definitions/)")
+            self.write_system(
+                log, "No skills loaded (add .md files to skill-definitions/)"
+            )
             return
 
         self.write_system(log, "Available skills (● = active):")
@@ -571,7 +587,10 @@ class ChatApp(App):
             # Send request to ollama and wait for response
             response = await ollama.AsyncClient().chat(
                 model=self.model,
-                messages=[{"role": "system", "content": self.skills_manager.system_prompt()}] + self.history,
+                messages=[
+                    {"role": "system", "content": self.skills_manager.system_prompt()}
+                ]
+                + self.history,
                 tools=self.tools or None,
             )
             msg = response.message
@@ -604,7 +623,6 @@ class ChatApp(App):
                 self.write_system(log, "Max steps reached. Stopping.")
 
         self.stop_loading()
-
 
     async def _execute_tool(
         self, call: ollama.Message.ToolCall, log: RichLog
