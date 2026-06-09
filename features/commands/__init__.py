@@ -3,6 +3,7 @@ from features.commands.handlers.skills_commands import (
     handle_list_skills,
     handle_skill_by_name,
 )
+from features.commands.handlers.history_commands import handle_compact
 from features.commands.registry import Command, CommandContext, CommandRegistry
 
 
@@ -16,6 +17,11 @@ def register_all_commands(registry: CommandRegistry) -> None:
         name="disable-skills",
         description="Deactivate a named skill, or all skills if no name given",
         handler=handle_disable_skills,
+    ))
+    registry.register(Command(
+        name="compact",
+        description="Summarize chat history into a single entry to free tokens (usage: /compact [N|all]; default: all)",
+        handler=handle_compact,
     ))
     registry.register_fallback(Command(
         name="_skill_fallback",

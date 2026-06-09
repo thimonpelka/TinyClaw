@@ -412,6 +412,7 @@ class ChatApp(App):
                 send_message=lambda display, full: self._send_message(display, full, log),
                 update_indicator=self._update_skills_indicator,
                 skills=self.skills_manager,
+                extras={"app": self},
             )
             handled = await self.registry.dispatch(text[1:], ctx)
             if not handled:
