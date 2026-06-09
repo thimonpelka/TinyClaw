@@ -2,7 +2,9 @@
 Plugin: web_fetch
 Fetches the text content of a URL.
 """
+
 import urllib.request
+
 
 @mcp.tool()
 def web_fetch(url: str) -> str:
