@@ -90,7 +90,12 @@ default_model = "openai/gpt-4o-mini"   # any model slug from openrouter.ai/model
 Stores secrets. Never committed to git.
 
 ```bash
-OPENROUTER_API_KEY=sk-or-...
+OPENROUTER_API_KEY=sk-or-...   # required for the openrouter provider
+
+TELEGRAM_BOT_TOKEN=...          # required for the telegram plugin
+TELEGRAM_CHAT_ID=...            # optional default recipient for telegram_send
+
+CALENDAR_TIMEZONE=Europe/Berlin # optional timezone for new calendar events (default: UTC)
 ```
 
 ### CLI flags
@@ -175,7 +180,9 @@ Tools are Python files in `plugins/`. Each file is auto-loaded at startup and re
 |--------|-------|
 | `calculator.py` | `calculate` — evaluates math expressions safely |
 | `time.py` | `get_time`, `get_year`, `get_month`, `get_day`, `get_hour` |
-| `web_fetch.py` | `fetch_url` — retrieves and returns content from a URL |
+| `web_fetch.py` | `web_fetch` — retrieves and returns content from a URL |
+| `telegram.py` | `telegram_send`, `telegram_get_updates` — send and read Telegram messages via a bot |
+| `google_calendar.py` | `calendar_list_events`, `calendar_create_event`, `calendar_delete_event`, `calendar_list_calendars` |
 | `skills.py` | `use_skill` — loads a skill's full guidance (used by the agent autonomously) |
 
 **Adding a new tool** — create `plugins/mytool.py`:
