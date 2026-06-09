@@ -1,5 +1,4 @@
 from features.commands.registry import CommandContext
-import ollama
 
 
 async def handle_compact(ctx: CommandContext, args: str) -> None:
@@ -64,9 +63,8 @@ async def handle_compact(ctx: CommandContext, args: str) -> None:
     ]
 
     try:
-        response = await ollama.AsyncClient().chat(model=app.model, messages=messages)
-        # response.message.content is expected to be the assistant text
-        summary = response.message.content if getattr(response, "message", None) else str(response)
+        result = await app.provider.chat(messages=messages, tools=[], model=app.model)
+        summary = result.content or ""
     except Exception as e:
         ctx.write_error(f"Summarization failed: {e}")
         return

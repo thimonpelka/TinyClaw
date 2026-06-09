@@ -1,13 +1,11 @@
 import asyncio
-import subprocess
-import httpx
 import json
 import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import override
 
-import ollama
+from dotenv import load_dotenv
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 from textual.app import App, ComposeResult
@@ -15,9 +13,11 @@ from textual.containers import Horizontal, Vertical
 from textual.widgets import Footer, Header, Input, RichLog, Label
 from typing_extensions import final
 
-from custom_types import CommandHistory, OllamaTool, Mode
+from custom_types import CommandHistory, LLMTool, Mode
 from features.commands import CommandContext, CommandRegistry, register_all_commands
 from features.skills import SkillsManager
+from llm import LLMMessage, get_provider, load_config, resolve_model
+from llm.protocol import LLMProvider, ToolCall
 
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
 SKILLS_DIR = Path(__file__).parent / "skill-definitions"
@@ -30,10 +30,8 @@ ASCII_LOGO = """
    ██║   ██║██╔██╗ ██║ ╚████╔╝ ██║     ██║     ███████║██║ █╗ ██║
    ██║   ██║██║╚██╗██║  ╚██╔╝  ██║     ██║     ██╔══██║██║███╗██║
    ██║   ██║██║ ╚████║   ██║   ╚██████╗███████╗██║  ██║╚███╔███╔╝
-   ╚═╝   ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝ 
+   ╚═╝   ╚═╝╚═╝  ╚═══╝   ╚═╝    ╚═════╝╚══════╝╚═╝  ╚═╝ ╚══╝╚══╝
 """
-
-OLLAMA_URL = "http://localhost:11434"
 
 
 @final
@@ -55,107 +53,60 @@ class ChatApp(App):
         ("d", "scroll_down", "Scroll Down"),
     ]
 
-    model = "qwen2.5:7b"  # TODO: change to other ollama models for testing
     mode: Mode
     debug_active: bool
     SPINNER = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
 
     tool_names: list[str] = []
-
-    ollama_ready: bool = False
-    model_ready: bool = False
-    ollama_process: subprocess.Popen[bytes] | None = None
-    ollama_running_locally: bool = True
+    provider_ready: bool = False
 
     def __init__(
         self,
         session: ClientSession,
-        tools: list[OllamaTool],
-        args: Namespace,
+        tools: list[LLMTool],
+        provider: LLMProvider,
+        model: str,
+        debug: bool = False,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
         self.session = session
-
         self.tools = tools
         self.tool_names = [tool["function"]["name"] for tool in tools]
-
-        self.history: list[CommandHistory] = []
+        self.history: list[dict] = []
         self.mode = Mode.NORMAL
-        self.debug_active = args.debug  # pyright: ignore[reportAny]
+        self.debug_active = debug
+        self.model = model
+        self.provider = provider
 
         self.skills_manager = SkillsManager(SKILLS_DIR)
         self.registry = CommandRegistry()
         register_all_commands(self.registry)
-
-        print(args.model)
-        if args.model is not None:
-            print(args.model)
-            self.model = args.model
 
         self.loading = False
         self.spinner_frame = 0
         self.spinner_task = None
 
     def write_user(self, log: RichLog, text: str) -> None:
-        """
-        Helper function for messages by the user
-
-        Args:
-            log: log object to print to
-            text: text to print
-        """
-
         log.write("\n[bold #7aa2f7]You[/bold #7aa2f7]")
         log.write(f"[#c0caf5]{text}[/]\n")
         log.scroll_end(animate=False)
 
     def write_system(self, log: RichLog, text: str) -> None:
-        """
-        Helper function for system messages
-
-        Args:
-            log: log object to print to
-            text: text to print
-        """
-
         log.write(f"[dim]{text}[/dim]\n")
         log.scroll_end(animate=False)
 
     def write_error(self, log: RichLog, text: str) -> None:
-        """
-        Helper function for system errors
-
-        Args:
-            log: log object to print to
-            text: text to print
-        """
-
         log.write(f"[bold #8B0000]{text}[/bold #8B0000]\n")
         log.scroll_end(animate=False)
 
     def write_assistant(self, log: RichLog, text: str) -> None:
-        """
-        Helper function for messages by the llm ("assistant")
-
-        Args:
-            log: log object to print to
-            text: text to print
-        """
-
         log.write(f"\n[bold #9ece6a]{self.TITLE}[/bold #9ece6a]")
         log.write(f"[#c0caf5]{text}[/]\n")
         log.scroll_end(animate=False)
 
     @override
     def compose(self) -> ComposeResult:
-        """
-
-        Sets up the TUI Layout and all available Widgets
-
-        Yields: TUI Layout
-
-        """
         yield Header(show_clock=False, icon="")
         with Vertical():
             yield RichLog(id="log", markup=True, wrap=True)
@@ -168,94 +119,8 @@ class ChatApp(App):
             with Horizontal(id="footer-inner"):
                 yield Footer(show_command_palette=False)
 
-    async def ensure_ollama_running(self, log: RichLog) -> None:
-        """
-        Ensure that ollama is running and ready for communication.
-
-        Args:
-            log: log to print info to
-        """
-        self.write_system(log, "Checking availability of ollama...")
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.get(f"{OLLAMA_URL}/api/tags", timeout=2)
-            self.write_system(log, "Ollama is already running. Great!")
-            self.ollama_ready = True
-            return
-        except Exception:
-            self.write_system(log, "Ollama not yet running. Starting Ollama...")
-
-        # Start ollama process
-        self.ollama_process = subprocess.Popen(
-            ["ollama", "serve"],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-        )
-        self.ollama_running_locally = True
-
-        # Wait until it's ready
-        for _ in range(20):
-            try:
-                async with httpx.AsyncClient() as client:
-                    await client.get(f"{OLLAMA_URL}/api/tags", timeout=2)
-                self.write_system(log, "Ollama started successfully!")
-                self.ollama_ready = True
-                return
-            except Exception:
-                await asyncio.sleep(0.5)
-
-        raise RuntimeError("Failed to start Ollama")
-
-    async def ensure_model(self, log: RichLog) -> None:
-        """
-        Ensure that the selected model is installed and ready.
-
-        Args:
-            log: log to print info to
-        """
-        self.write_system(log, f"Checking availability of model: {self.model}")
-
-        models = await ollama.AsyncClient().list()
-        names = [m.model for m in models.models]
-
-        if self.model in names:
-            self.model_ready = True
-            self.write_system(
-                log, f"Model already installed: {self.model}. Ready for operations!"
-            )
-            return
-
-        self.write_system(
-            log, f"Model not found. Pulling: {self.model} (this may take a while...)"
-        )
-
-        # Pull model with progress
-        try:
-            async for progress in await ollama.AsyncClient().pull(
-                self.model, stream=True
-            ):
-                if progress.status:
-                    self.write_system(log, progress.status)
-        except ollama.ResponseError as e:
-            self.write_error(
-                log, "Error while loading model. Please restart with a different model!"
-            )
-
-            if self.debug_active:
-                self.write_error(log, f"Error is: {e}")
-
-            return
-
-        self.write_system(log, f"Model installation complete: {self.model}")
-        self.model_ready = True
-
     def update_status(self) -> None:
-        """
-        Updates the status bar with the current MODE
-        """
-
         status = self.query_one("#status", Label)
-
         if self.mode == Mode.NORMAL:
             status.update("[bold yellow]NORMAL[/]")
         elif self.mode == Mode.INSERT:
@@ -263,47 +128,15 @@ class ChatApp(App):
         elif self.mode == Mode.TOOLS:
             status.update("[bold magenta]TOOLS[/]")
 
-    def add_to_history(self, new_item: CommandHistory) -> None:
-        """
-        Add an entry to the history. Automatically cuts of the history at max defined length
-
-        Args:
-            new_item: item to add to history
-        """
-
+    def add_to_history(self, new_item: dict) -> None:
         self.history.append(new_item)
-
         if len(self.history) > MAX_HISTORY:
-            # TODO: Possible improvement: Instead of just cutting it we could tell the LLM to summarize the last few history items.
-            # e.g. once it reaches MAX_HISTORY. it should summarize the last 5 messages into one.
             self.history = self.history[-MAX_HISTORY:]
 
     async def on_unmount(self) -> None:
-        """
-        Gets called on unmount of app. Shuts down ollama if started by the app.
-        """
-
-        if self.ollama_running_locally and self.ollama_process:
-            print("Shutting down Ollama...")
-
-            try:
-                self.ollama_process.terminate()
-
-                try:
-                    self.ollama_process.wait(timeout=5)
-                    print("Ollama stopped successfully!")
-                except subprocess.TimeoutExpired:
-                    print("Ollama did not stop in time. Killing it...")
-                    self.ollama_process.kill()
-
-            except Exception as e:
-                print(f"Failed to stop Ollama: {e}")
+        self.provider.shutdown()
 
     async def on_mount(self) -> None:
-        """
-        On mount print the list of tools loaded from the MCP
-        """
-
         log = self.query_one("#log", RichLog)
 
         tool_names = [t["function"]["name"] for t in self.tools] if self.tools else []
@@ -343,19 +176,20 @@ class ChatApp(App):
 
         self.run_worker(
             self._ensure_readiness(log),
-            exclusive=True,  # makes it so that the previous request gets cancelled upon a new request!
+            exclusive=True,
             thread=False,
         )
 
     async def _ensure_readiness(self, log: RichLog) -> None:
-
-        await self.ensure_ollama_running(log)
-        await self.ensure_model(log)
-
-        if self.ollama_ready and self.model_ready:
+        try:
+            self.write_system(log, f"Preparing provider (model: {self.model})...")
+            await self.provider.ensure_ready(self.model)
+            self.provider_ready = True
             self.write_system(
                 log, f"{self.TITLE} is ready for you! Press 'i' to interact."
             )
+        except Exception as e:
+            self.write_error(log, f"Provider setup failed: {e}")
 
     def start_loading(self) -> None:
         self.loading = True
@@ -364,51 +198,31 @@ class ChatApp(App):
         def tick() -> None:
             if not self.loading:
                 return
-
             label = self.query_one("#loadingStatus", Label)
             label.display = True
             frame = self.SPINNER[self.spinner_frame % len(self.SPINNER)]
             label.update(f"[bold cyan]{frame} Thinking...[/]")
-
             self.spinner_frame += 1
 
         self.spinner_task = self.set_interval(0.1, tick)
 
     def stop_loading(self) -> None:
         self.loading = False
-
         if self.spinner_task:
             self.spinner_task.stop()
             label = self.query_one("#loadingStatus", Label)
             label.display = False
             self.spinner_task = None
-
         self.update_status()
 
     async def on_input_submitted(self, event: Input.Submitted) -> None:
-        """
-        Input handler. Handles input field submission. Runs agent with request in thread.
-
-        Args:
-            event: Input event by Textual
-        """
-
-        # Only allow typing while in insert mode!
         if self.mode != Mode.INSERT:
             return
 
         log = self.query_one("#log", RichLog)
 
-        if not self.ollama_ready:
-            self.write_system(
-                log, "Ollama is not yet ready for operations. Please wait..."
-            )
-            return
-
-        if not self.model_ready:
-            self.write_system(
-                log, "The ollama model is not yet ready for operations. Please wait..."
-            )
+        if not self.provider_ready:
+            self.write_system(log, "Provider is not yet ready. Please wait...")
             return
 
         text = event.value.strip()
@@ -451,169 +265,106 @@ class ChatApp(App):
         label.update(self.skills_manager.indicator_text())
 
     def action_enter_insert(self) -> None:
-        """
-        Action which gets called when the "enter_insert" event is triggered.
-        Updates mode. Enables / Disables the required fields / widgets.
-        """
-
         self.mode = Mode.INSERT
-
         tools_view = self.query_one("#tools")
         log = self.query_one("#log")
-
         tools_view.display = False
         log.display = True
-
         input_field = self.query_one(Input)
         input_field.disabled = False
         input_field.focus()
         input_field.placeholder = "Type a message..."
-
         self.update_status()
 
     def action_enter_normal(self) -> None:
-        """
-        Action which gets called when the "enter_normal" event is triggered.
-        Updates mode. Enables / Disables the required fields / widgets.
-        """
-
         self.mode = Mode.NORMAL
-
         tools_view = self.query_one("#tools")
         log = self.query_one("#log")
-
         tools_view.display = False
         log.display = True
-
         input_field = self.query_one(Input)
         input_field.disabled = True
         input_field.blur()
-
         self.update_status()
 
     def action_show_tools(self) -> None:
-        """
-        Action which gets called when the "show_tools" event is triggered.
-        Updates mode. Enables / Disables the required fields / widgets.
-        """
-
         self.mode = Mode.TOOLS
-
         tools_view = self.query_one("#tools", RichLog)
         log = self.query_one("#log")
-
         tools_view.display = True
         log.display = False
-
         tools_view.clear()
-
         for t in self.tools:
             fn = t["function"]
             tools_view.write(f"[bold #bb9af7]{fn['name']}[/]")
             self.write_system(tools_view, fn["description"])
             self.write_system(tools_view, json.dumps(fn["parameters"], indent=2))
-
         self.update_status()
 
     def action_show_skills(self) -> None:
         log = self.query_one("#log", RichLog)
         tools_view = self.query_one("#tools")
-
         tools_view.display = False
         log.display = True
-
         if not self.skills_manager.skills:
             self.write_system(
                 log, "No skills loaded (add .md files to skill-definitions/)"
             )
             return
-
         self.write_system(log, "Available skills (● = active):")
         for badge, desc, when in self.skills_manager.list_renderables():
             log.write(f"  {badge} — {desc}  [dim](use when: {when})[/dim]")
 
     def action_clear_chat(self) -> None:
-        """
-        Action which gets called when the "clear_chat" event is triggered.
-        Clears the history and the log.
-        """
-
         self.history.clear()
         self.query_one("#log", RichLog).clear()
 
     def action_scroll_up(self) -> None:
-        """
-        Action which gets called when the "scroll_up" event is triggered.
-        Scrolls the log up
-        """
-
         if self.mode == Mode.NORMAL:
-            log = self.query_one("#log")
-            log.scroll_up()
+            self.query_one("#log").scroll_up()
         elif self.mode == Mode.TOOLS:
-            log = self.query_one("#tools")
-            log.scroll_up()
+            self.query_one("#tools").scroll_up()
 
     def action_scroll_down(self) -> None:
-        """
-        Action which gets called when the "scroll_down" event is triggered.
-        Scrolls the log down
-        """
-
         if self.mode == Mode.NORMAL:
-            log = self.query_one("#log")
-            log.scroll_down()
+            self.query_one("#log").scroll_down()
         elif self.mode == Mode.TOOLS:
-            log = self.query_one("#tools")
-            log.scroll_down()
+            self.query_one("#tools").scroll_down()
 
     async def _agent_turn(self, log: RichLog) -> None:
-        """
-        Agentic loop: call Ollama, handle tool calls, repeat.
-        """
-
+        """Agentic loop: call provider, handle tool calls, repeat."""
         self.action_enter_normal()
         self.start_loading()
 
         if self.debug_active:
             self.write_system(log, "Starting communication with Agent.")
 
-        for step in range(
-            MAX_STEPS
-        ):  # loop until finished, but only for max MAX_STEPS to avoid infinite loop
+        for step in range(MAX_STEPS):
             if self.debug_active:
                 self.write_system(log, f"Communication iteration {step} with Agent")
 
-            # Send request to ollama and wait for response
-            response = await ollama.AsyncClient().chat(
-                model=self.model,
+            msg = await self.provider.chat(
                 messages=[
                     {"role": "system", "content": self.skills_manager.system_prompt()}
                 ]
                 + self.history,
-                tools=self.tools or None,
+                tools=self.tools,
+                model=self.model,
             )
-            msg = response.message
 
             if self.debug_active:
                 self.write_system(log, str(msg))
 
-            self.add_to_history(msg)  # pyright: ignore[reportArgumentType]
+            self.add_to_history(msg.history_entry)
 
-            # Print any text content
             if msg.content:
                 self.write_assistant(log, msg.content)
 
-            # No tool calls → we're done
             if not msg.tool_calls:
                 break
 
-            # Handle tool calls asynchronously
             tasks = [self._execute_tool(call, log) for call in msg.tool_calls]
-
             results = await asyncio.gather(*tasks)
-
-            # retrieve all results and append to history
             for res in results:
                 self.add_to_history(res)
 
@@ -624,30 +375,20 @@ class ChatApp(App):
 
         self.stop_loading()
 
-    async def _execute_tool(
-        self, call: ollama.Message.ToolCall, log: RichLog
-    ) -> CommandHistory:
-        """
-        Executes a given tool as requested by the LLM
-
-        Args:
-            call: call object returned by LLM
-            log: log to print the log to
-
-        Returns: Response of service. (CommandHistory type)
-
-        """
-        name = call.function.name
-        args = call.function.arguments
+    async def _execute_tool(self, call: ToolCall, log: RichLog) -> dict:
+        """Executes a tool call requested by the LLM."""
+        name = call.name
+        args = call.arguments
 
         if name not in self.tool_names:
-            return {"role": "tool", "content": f"Error: Tool '{name}' does not exist"}
+            return self.provider.make_tool_result(
+                call, f"Error: Tool '{name}' does not exist"
+            )
 
         self.write_system(log, f"Using tool: {name} ({json.dumps(args)})")
 
         try:
             result = await self.session.call_tool(name, args)  # pyright: ignore[reportArgumentType]
-
             result_text = (
                 result.content[0].text
                 if result.content and hasattr(result.content[0], "text")
@@ -657,25 +398,20 @@ class ChatApp(App):
             if self.debug_active:
                 self.write_system(log, f"{name} → {result_text}")
 
-            return {
-                "role": "tool",
-                "content": result_text,
-            }
+            return self.provider.make_tool_result(call, result_text)
 
         except Exception as e:
             self.write_system(log, f"{name} failed: {e}")
-            return {
-                "role": "tool",
-                "content": f"Error: {e}",
-            }
+            return self.provider.make_tool_result(call, f"Error: {e}")
 
 
 async def run(args: Namespace) -> None:
-    """
-    Starts the MCP Server in the background.
-    Gathers the list of tools available within our Agentic AI.
-    Starts the TUI.
-    """
+    load_dotenv()
+
+    config = load_config()
+    provider_name: str = config.get("provider", "ollama")
+    provider = get_provider(provider_name)
+    model = resolve_model(config, provider_name, args.model)
 
     server_params = StdioServerParameters(
         command=sys.executable,
@@ -686,11 +422,8 @@ async def run(args: Namespace) -> None:
         async with ClientSession(read, write) as session:
             await session.initialize()
 
-            # Fetch tools from MCP and convert to Ollama format
             tools_response = await session.list_tools()
-            mcp_tools = tools_response.tools
-
-            ollama_tools: list[OllamaTool] = [
+            llm_tools: list[LLMTool] = [
                 {
                     "type": "function",
                     "function": {
@@ -699,14 +432,15 @@ async def run(args: Namespace) -> None:
                         "parameters": t.inputSchema,
                     },
                 }
-                for t in mcp_tools
+                for t in tools_response.tools
             ]
 
-            # Start TUI (run in background)
             app = ChatApp(
                 session=session,
-                tools=ollama_tools,
-                args=args,
+                tools=llm_tools,
+                provider=provider,
+                model=model,
+                debug=args.debug,
             )
             await app.run_async()
 
@@ -721,15 +455,13 @@ if __name__ == "__main__":
         default=False,
         help="Print additional information to the log.",
     )
-
     parser.add_argument(
         "-m",
         "--model",
         dest="model",
         default=None,
-        help="Specifically select a model. Must be a ollama available model",
+        help="Override the model defined in config.toml for this session.",
     )
 
     args = parser.parse_args()
-
     asyncio.run(run(args))
