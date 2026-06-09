@@ -1,3 +1,5 @@
+from features.commands.handlers.help_commands import make_help_handler
+from features.commands.handlers.memory_commands import handle_create_memory
 from features.commands.handlers.skills_commands import (
     handle_disable_skills,
     handle_list_skills,
@@ -9,6 +11,11 @@ from features.commands.registry import Command, CommandContext, CommandRegistry
 
 def register_all_commands(registry: CommandRegistry) -> None:
     registry.register(Command(
+        name="help",
+        description="List all available commands and how to use them",
+        handler=make_help_handler(lambda: registry.commands),
+    ))
+    registry.register(Command(
         name="skills",
         description="List all available skills and their active status",
         handler=handle_list_skills,
@@ -17,6 +24,11 @@ def register_all_commands(registry: CommandRegistry) -> None:
         name="disable-skills",
         description="Deactivate a named skill, or all skills if no name given",
         handler=handle_disable_skills,
+    ))
+    registry.register(Command(
+        name="create-memory",
+        description="Ask the agent to save a memory. Usage: /create-memory <what to remember>",
+        handler=handle_create_memory,
     ))
     registry.register(Command(
         name="compact",

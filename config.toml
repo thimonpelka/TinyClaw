@@ -1,0 +1,9 @@
+# TinyClaw LLM provider configuration
+# Possible values are "ollama" or "openrouter"
+provider = "openrouter"
+
+[ollama]
+default_model = "qwen2.5:7b"
+
+[openrouter]
+default_model = "openai/gpt-4o-mini"

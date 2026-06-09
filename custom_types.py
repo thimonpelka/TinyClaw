@@ -8,7 +8,7 @@ class FunctionSpec(TypedDict):
     parameters: dict[str, str]
 
 
-class OllamaTool(TypedDict):
+class LLMTool(TypedDict):
     type: str
     function: FunctionSpec
 
