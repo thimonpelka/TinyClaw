@@ -3,7 +3,10 @@ import logging
 import sys
 from pathlib import Path
 import traceback
+from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+load_dotenv()
 
 mcp = FastMCP("agent-tools", log_level="WARNING")
 
