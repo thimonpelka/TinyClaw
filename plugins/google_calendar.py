@@ -6,7 +6,7 @@ Setup (one-time):
   1. Go to console.cloud.google.com → Enable the Google Calendar API
   2. APIs & Services → Credentials → Create → OAuth 2.0 Client ID (Desktop app)
   3. Download the JSON → save as credentials.json in the project root
-  4. Run: uv run python setup_google_calendar.py
+  4. Run: uv run python scripts/setup_google_calendar.py
      This opens a browser for authorization and saves token.json
 
 Optional .env variable:
@@ -34,11 +34,11 @@ def _service():
         raise RuntimeError(
             "credentials.json not found in the project root. "
             "Download it from Google Cloud Console (APIs & Services → Credentials "
-            "→ OAuth 2.0 Client → Download JSON) and run: uv run python setup_google_calendar.py"
+            "→ OAuth 2.0 Client → Download JSON) and run: uv run python scripts/setup_google_calendar.py"
         )
     if not _TOKEN_FILE.exists():
         raise RuntimeError(
-            "Not authorized yet. Run: uv run python setup_google_calendar.py"
+            "Not authorized yet. Run: uv run python scripts/setup_google_calendar.py"
         )
 
     creds = Credentials.from_authorized_user_file(str(_TOKEN_FILE), _SCOPES)
@@ -51,11 +51,11 @@ def _service():
             except RefreshError:
                 raise RuntimeError(
                     "Token expired and could not be refreshed. "
-                    "Re-run: uv run python setup_google_calendar.py"
+                    "Re-run: uv run python scripts/setup_google_calendar.py"
                 )
         else:
             raise RuntimeError(
-                "Credentials are invalid. Re-run: uv run python setup_google_calendar.py"
+                "Credentials are invalid. Re-run: uv run python scripts/setup_google_calendar.py"
             )
 
     return build("calendar", "v3", credentials=creds)
