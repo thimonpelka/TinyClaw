@@ -19,10 +19,12 @@ from features.skills import SkillsManager
 from llm import LLMMessage, get_provider, load_config, resolve_model
 from llm.protocol import LLMProvider, ToolCall
 
+
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
 SKILLS_DIR = Path(__file__).parent / "skill-definitions"
 MAX_STEPS = 8
 MAX_HISTORY = 20
+
 
 ASCII_LOGO = """
 ████████╗██╗███╗   ██╗██╗   ██╗ ██████╗██╗      █████╗ ██╗    ██╗

@@ -11,3 +11,6 @@ wheels/
 /.env
 /CONTEXT.md
 /docs/adr
+
+# Agent memory store
+.memory/
