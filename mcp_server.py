@@ -53,7 +53,7 @@ def load_plugins() -> None:
         try:
             if spec.loader is None:
                 logger.info("Loader of spec is null. Skipping Plugin: %s", plugin_file)
-                break
+                continue
 
             spec.loader.exec_module(module)
             logger.info("Loaded plugin: %s", plugin_file.name)
