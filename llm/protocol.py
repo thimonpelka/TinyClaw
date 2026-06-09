@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -29,6 +30,11 @@ class LLMProvider(Protocol):
 
     def make_tool_result(self, tool_call: ToolCall, content: str) -> dict: ...
 
-    async def ensure_ready(self, model: str) -> None: ...
+    async def ensure_ready(
+        self,
+        model: str,
+        on_log: Callable[[str], None] | None = None,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> None: ...
 
     def shutdown(self) -> None: ...

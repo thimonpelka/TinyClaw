@@ -1,6 +1,6 @@
 # TinyClaw LLM provider configuration
 # Possible values are "ollama" or "openrouter"
-provider = "openrouter"
+provider = "ollama"
 
 [ollama]
 default_model = "qwen2.5:7b"

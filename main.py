@@ -181,14 +181,29 @@ class ChatApp(App):
         )
 
     async def _ensure_readiness(self, log: RichLog) -> None:
+        loading_label = self.query_one("#loadingStatus", Label)
+
+        def on_progress(msg: str) -> None:
+            if msg:
+                loading_label.display = True
+                loading_label.update(msg)
+            else:
+                loading_label.display = False
+
         try:
             self.write_system(log, f"Preparing provider (model: {self.model})...")
-            await self.provider.ensure_ready(self.model)
+            await self.provider.ensure_ready(
+                self.model,
+                on_log=lambda msg: self.write_system(log, msg),
+                on_progress=on_progress,
+            )
+            loading_label.display = False
             self.provider_ready = True
             self.write_system(
                 log, f"{self.TITLE} is ready for you! Press 'i' to interact."
             )
         except Exception as e:
+            loading_label.display = False
             self.write_error(log, f"Provider setup failed: {e}")
 
     def start_loading(self) -> None:

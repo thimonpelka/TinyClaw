@@ -1,5 +1,6 @@
 import json
 import os
+from collections.abc import Callable
 
 import httpx
 
@@ -12,11 +13,18 @@ class OpenRouterProvider:
     def __init__(self) -> None:
         self._api_key = os.environ.get("OPENROUTER_API_KEY", "")
 
-    async def ensure_ready(self, model: str) -> None:
+    async def ensure_ready(
+        self,
+        model: str,
+        on_log: Callable[[str], None] | None = None,
+        on_progress: Callable[[str], None] | None = None,
+    ) -> None:
         if not self._api_key:
             raise RuntimeError(
                 "OPENROUTER_API_KEY is not set. Add it to your .env file."
             )
+        if on_log:
+            on_log(f"OpenRouter ready (model: {model})")
 
     async def chat(
         self,
