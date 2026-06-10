@@ -417,7 +417,12 @@ class ChatApp(App):
         self._agent_busy = True
         log = self.query_one("#log", RichLog)
         task_id = task["id"]
-        isolated_history: list[dict] = [{"role": "user", "content": task["description"]}]
+        prompt = (
+            f"You are executing a scheduled heartbeat task. "
+            f"Perform the following action NOW using your tools — do NOT create new tasks:\n\n"
+            f"{task['description']}"
+        )
+        isolated_history: list[dict] = [{"role": "user", "content": prompt}]
 
         try:
             for _ in range(MAX_STEPS):
