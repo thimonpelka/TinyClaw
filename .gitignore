@@ -17,3 +17,6 @@ wheels/
 # Agent memory store
 .memory/
 /.tasks
+
+.DS_STORE
+.python-version
