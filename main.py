@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 from argparse import ArgumentParser, Namespace
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import override
 
@@ -22,6 +23,7 @@ from llm.protocol import LLMProvider, ToolCall
 
 SERVER_SCRIPT = Path(__file__).parent / "mcp_server.py"
 SKILLS_DIR = Path(__file__).parent / "skill-definitions"
+TASKS_FILE = Path(__file__).parent / ".tasks" / "tasks.json"
 MAX_STEPS = 8
 MAX_HISTORY = 20
 
@@ -88,6 +90,7 @@ class ChatApp(App):
         self.loading = False
         self.spinner_frame = 0
         self.spinner_task = None
+        self._agent_busy: bool = False
 
     def write_user(self, log: RichLog, text: str) -> None:
         log.write("\n[bold #7aa2f7]You[/bold #7aa2f7]")
@@ -204,6 +207,8 @@ class ChatApp(App):
             self.write_system(
                 log, f"{self.TITLE} is ready for you! Press 'i' to interact."
             )
+            await self._heartbeat_check()
+            self.set_interval(60, self._heartbeat_check)
         except Exception as e:
             loading_label.display = False
             self.write_error(log, f"Provider setup failed: {e}")
@@ -350,47 +355,117 @@ class ChatApp(App):
 
     async def _agent_turn(self, log: RichLog) -> None:
         """Agentic loop: call provider, handle tool calls, repeat."""
+        self._agent_busy = True
         self.action_enter_normal()
         self.start_loading()
 
-        if self.debug_active:
-            self.write_system(log, "Starting communication with Agent.")
-
-        for step in range(MAX_STEPS):
+        try:
             if self.debug_active:
-                self.write_system(log, f"Communication iteration {step} with Agent")
+                self.write_system(log, "Starting communication with Agent.")
 
-            msg = await self.provider.chat(
-                messages=[
-                    {"role": "system", "content": self.skills_manager.system_prompt()}
-                ]
-                + self.history,
-                tools=self.tools,
-                model=self.model,
-            )
+            for step in range(MAX_STEPS):
+                if self.debug_active:
+                    self.write_system(log, f"Communication iteration {step} with Agent")
 
-            if self.debug_active:
-                self.write_system(log, str(msg))
+                msg = await self.provider.chat(
+                    messages=[
+                        {"role": "system", "content": self.skills_manager.system_prompt()}
+                    ]
+                    + self.history,
+                    tools=self.tools,
+                    model=self.model,
+                )
 
-            self.add_to_history(msg.history_entry)
+                if self.debug_active:
+                    self.write_system(log, str(msg))
 
-            if msg.content:
-                self.write_assistant(log, msg.content)
+                self.add_to_history(msg.history_entry)
 
-            if not msg.tool_calls:
+                if msg.content:
+                    self.write_assistant(log, msg.content)
+
+                if not msg.tool_calls:
+                    break
+
+                tool_calls = [self._execute_tool(call, log) for call in msg.tool_calls]
+                results = await asyncio.gather(*tool_calls)
+                for res in results:
+                    self.add_to_history(res)
+
+                self.write_system(log, "All tool calls completed")
+
+                if self.debug_active and step == (MAX_STEPS - 1):
+                    self.write_system(log, "Max steps reached. Stopping.")
+        finally:
+            self.stop_loading()
+            self._agent_busy = False
+
+    def _load_tasks(self) -> list[dict]:
+        if not TASKS_FILE.exists():
+            return []
+        try:
+            return json.loads(TASKS_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            return []
+
+    def _save_tasks(self, tasks: list[dict]) -> None:
+        TASKS_FILE.parent.mkdir(exist_ok=True)
+        TASKS_FILE.write_text(json.dumps(tasks, indent=2), encoding="utf-8")
+
+    async def _heartbeat_turn(self, task: dict) -> None:
+        """Isolated agent turn for a single HeartbeatTask. History is discarded after."""
+        self._agent_busy = True
+        log = self.query_one("#log", RichLog)
+        task_id = task["id"]
+        isolated_history: list[dict] = [{"role": "user", "content": task["description"]}]
+
+        try:
+            for _ in range(MAX_STEPS):
+                msg = await self.provider.chat(
+                    messages=[
+                        {"role": "system", "content": self.skills_manager.system_prompt()}
+                    ] + isolated_history,
+                    tools=self.tools,
+                    model=self.model,
+                )
+                isolated_history.append(msg.history_entry)
+
+                if not msg.tool_calls:
+                    break
+
+                tool_calls = [self._execute_tool(call, log) for call in msg.tool_calls]
+                results = await asyncio.gather(*tool_calls)
+                for res in results:
+                    isolated_history.append(res)
+
+            self.write_system(log, f"[Heartbeat] '{task_id}' done: {task['description'][:60]}")
+
+            all_tasks = self._load_tasks()
+            if "interval" in task:
+                next_run = datetime.now() + timedelta(seconds=task["interval"])
+                for t in all_tasks:
+                    if t["id"] == task_id:
+                        t["run_at"] = next_run.isoformat(timespec="seconds")
+                        break
+                self._save_tasks(all_tasks)
+            else:
+                self._save_tasks([t for t in all_tasks if t["id"] != task_id])
+
+        except Exception as e:
+            self.write_error(log, f"[Heartbeat] Task '{task_id}' failed: {e}")
+        finally:
+            self._agent_busy = False
+
+    async def _heartbeat_check(self) -> None:
+        """Discover due HeartbeatTasks and run each once, sequentially."""
+        if self._agent_busy or not self.provider_ready:
+            return
+        now = datetime.now()
+        due = [t for t in self._load_tasks() if datetime.fromisoformat(t["run_at"]) <= now]
+        for task in due:
+            if self._agent_busy:
                 break
-
-            tasks = [self._execute_tool(call, log) for call in msg.tool_calls]
-            results = await asyncio.gather(*tasks)
-            for res in results:
-                self.add_to_history(res)
-
-            self.write_system(log, "All tool calls completed")
-
-            if self.debug_active and step == (MAX_STEPS - 1):
-                self.write_system(log, "Max steps reached. Stopping.")
-
-        self.stop_loading()
+            await self._heartbeat_turn(task)
 
     async def _execute_tool(self, call: ToolCall, log: RichLog) -> dict:
         """Executes a tool call requested by the LLM."""
