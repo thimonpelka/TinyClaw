@@ -17,6 +17,7 @@ A terminal-based AI chat application built with [Textual](https://textual.textua
 - **MCP tool integration** — agentic loop with parallel tool execution
 - **Plugin system** — add new tools by dropping a `.py` file into `plugins/`
 - **Skills system** — reusable behavioral guidance injected into the agent via `.md` files
+- **Heartbeats** — the agent can schedule tasks that execute autonomously on a timer while the app is running
 - **Vim-inspired UI** — modal keyboard navigation (Normal / Insert / Tools)
 - **Auto-manages Ollama** — starts and stops `ollama serve` automatically if not running
 - **Auto-pulls models** — downloads the selected Ollama model on first run if not installed
@@ -170,6 +171,39 @@ See [`features/skills/README.md`](features/skills/README.md) for full documentat
 
 ---
 
+## Heartbeats (Autonomous Tasks)
+
+TinyClaw checks every 60 seconds for scheduled tasks and executes them autonomously — no user input required. Tasks are persisted in `.tasks/tasks.json` so they survive restarts. On startup the app runs a catch-up check and executes any tasks that were due while it was offline.
+
+**Ask the agent to schedule a task in plain language:**
+
+> "Remind me via Telegram every morning at 9am to drink water."
+
+> "Check my calendar every hour and send me a Telegram summary of what's coming up."
+
+The agent will call `create_task` internally to persist the task.
+
+**Task types:**
+
+| Type | Behaviour |
+|------|-----------|
+| One-shot | Runs once at `run_at`, then deleted automatically |
+| Recurring | Runs at `run_at`, then rescheduled `interval` seconds later, indefinitely |
+
+**Important:** Tasks only execute while the app is running. If the app was closed during a scheduled window, a missed task runs once on the next startup — recurring tasks are never executed multiple times to catch up.
+
+**Managing tasks directly:**
+
+You can also ask the agent to list or cancel tasks:
+
+> "Show me all my scheduled tasks."
+
+> "Cancel the calendar reminder task."
+
+Tasks are stored in `.tasks/tasks.json` and can be inspected or edited manually if needed.
+
+---
+
 ## Plugins (MCP Tools)
 
 Tools are Python files in `plugins/`. Each file is auto-loaded at startup and registers its tools via the `@mcp.tool()` decorator. The `mcp` instance is injected automatically — no imports or boilerplate needed.
@@ -184,6 +218,7 @@ Tools are Python files in `plugins/`. Each file is auto-loaded at startup and re
 | `telegram.py` | `telegram_send`, `telegram_get_updates` — send and read Telegram messages via a bot |
 | `google_calendar.py` | `calendar_list_events`, `calendar_create_event`, `calendar_delete_event`, `calendar_list_calendars` |
 | `skills.py` | `use_skill` — loads a skill's full guidance (used by the agent autonomously) |
+| `tasks.py` | `create_task`, `list_tasks`, `delete_task` — schedule autonomous heartbeat tasks |
 
 **Adding a new tool** — create `plugins/mytool.py`:
 

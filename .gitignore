@@ -16,3 +16,4 @@ wheels/
 
 # Agent memory store
 .memory/
+/.tasks
