@@ -11,6 +11,7 @@ wheels/
 /.env
 /credentials.json
 /token.json
+/token_gmail.json
 /CONTEXT.md
 /docs/adr
 
