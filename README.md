@@ -28,7 +28,7 @@ A terminal-based AI chat application built with [Textual](https://textual.textua
 
 **1. Install prerequisites**
 
-- [uv](https://docs.astral.sh/uv/getting-started/installation/) — Python package manager
+- [uv](https://docs.astral.sh/uv/getting-started/installation/) — Python package manager (automatically installs the required Python version — see below — no separate Python install needed)
 - For local models: [Ollama](https://ollama.com/download)
 
 **2. Clone and install dependencies**
@@ -38,6 +38,8 @@ git clone <repo-url>
 cd TinyClaw
 uv sync
 ```
+
+> Requires Python >=3.14. `uv sync` installs this automatically if it isn't already on your system — no manual Python setup needed.
 
 **3. Configure your provider**
 
@@ -77,7 +79,7 @@ Controls which provider is active and the default model for each provider. Creat
 
 ```toml
 # "ollama" or "openrouter"
-provider = "ollama"
+provider = "openrouter"
 
 [ollama]
 default_model = "qwen2.5:7b"   # any model available in Ollama
@@ -142,6 +144,8 @@ Type a `/command` in the input and press Enter. Available while in Insert mode.
 | `/<skill-name> <message>` | Use a skill for this one message only (inline, one-shot) |
 | `/disable-skills` | Deactivate all active skills |
 | `/disable-skills <name>` | Deactivate a specific skill by name |
+| `/help` | List all available commands and how to use them |
+| `/create-memory <description>` | Ask the agent to save a memory about the given description |
 
 Active skills appear as colored badges in the status bar below the input box.
 
@@ -217,8 +221,21 @@ Tools are Python files in `plugins/`. Each file is auto-loaded at startup and re
 | `web_fetch.py` | `web_fetch` — retrieves and returns content from a URL |
 | `telegram.py` | `telegram_send`, `telegram_get_updates` — send and read Telegram messages via a bot |
 | `google_calendar.py` | `calendar_list_events`, `calendar_create_event`, `calendar_delete_event`, `calendar_list_calendars` |
+| `gmail.py` | `gmail_list_emails`, `gmail_get_email`, `gmail_send_email`, `gmail_reply_email`, `gmail_mark_read` |
+| `memory.py` | `read_memory_overview`, `read_memory_file`, `save_memory`, `update_memory` — persistent agent memory backing the `/create-memory` command |
 | `skills.py` | `use_skill` — loads a skill's full guidance (used by the agent autonomously) |
 | `tasks.py` | `create_task`, `list_tasks`, `delete_task` — schedule autonomous heartbeat tasks |
+
+**Google Calendar and Gmail setup** — both plugins use OAuth and need a one-time setup before use:
+
+1. Go to [console.cloud.google.com](https://console.cloud.google.com) → enable the Google Calendar API and/or Gmail API
+2. APIs & Services → Credentials → Create → OAuth 2.0 Client ID (Desktop app) → download the JSON and save it as `credentials.json` in the project root (the same file can be reused for both plugins)
+3. Run the matching setup script to open a browser and authorize:
+
+```bash
+uv run python scripts/setup_google_calendar.py   # saves token.json
+uv run python scripts/setup_gmail.py              # saves token_gmail.json
+```
 
 **Adding a new tool** — create `plugins/mytool.py`:
 
@@ -303,6 +320,7 @@ TinyClaw/
 │
 ├── plugins/                 # MCP tool definitions (auto-loaded)
 ├── skill-definitions/       # Agent skill files (.md)
+├── scripts/                 # One-time OAuth setup scripts (Gmail, Google Calendar)
 │
 └── features/
     ├── commands/            # Slash-command registry and handlers
