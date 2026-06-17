@@ -6,4 +6,4 @@ provider = "openrouter"
 default_model = "qwen2.5:7b"
 
 [openrouter]
-default_model = "openai/gpt-4o-mini"
+default_model = "openai/gpt-oss-120b:free"
